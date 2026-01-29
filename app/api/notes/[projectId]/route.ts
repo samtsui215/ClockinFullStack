@@ -1,84 +1,94 @@
-// `/api/notes/[projectId]/route.ts`
+// app/api/notes/[projectId]/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { randomUUID } from "crypto";
 
-// GET notes for a project
 export async function GET(
   req: Request,
-  { params }: { params: { projectId: string } }
+  { params }: { params: Promise<{ projectId: string }> }  // ← Changed to Promise
 ) {
-  const { projectId } = params;
+  const { projectId } = await params;  // ← Added await
+  
   if (!projectId) {
     return NextResponse.json({ error: "Missing projectId" }, { status: 400 });
   }
 
-  const stmt = db.prepare(`
-    SELECT 
-      notes.id,
-      notes.user_id,
-      notes.project_id,
-      notes.content,
-      notes.created_at,
-      notes.updated_at,
-      notes.completed,
-      users.first_name,
-      users.last_name,
-      users.email
-    FROM notes
-    JOIN users ON users.id = notes.user_id
-    WHERE notes.project_id = ?
-    ORDER BY notes.created_at DESC
-  `);
+  try {
+    const stmt = db.prepare(`
+      SELECT 
+        n.id,
+        n.user_id,
+        n.project_id,
+        n.content,
+        n.created_at,
+        n.updated_at,
+        n.completed,
+        u.first_name,
+        u.last_name,
+        u.email
+      FROM notes n
+      LEFT JOIN users u ON n.user_id = u.id
+      WHERE n.project_id = ?
+      ORDER BY n.completed ASC, n.created_at DESC
+    `);
 
-  const notes = stmt.all(projectId);
-  return NextResponse.json(notes);
+    const notes = stmt.all(projectId);
+    return NextResponse.json(notes);
+  } catch (err) {
+    console.error("Failed to fetch notes:", err);
+    return NextResponse.json({ error: "Failed to fetch notes" }, { status: 500 });
+  }
 }
 
-// POST a new note
 export async function POST(
   req: Request,
-  { params }: { params: { projectId: string } }
+  { params }: { params: Promise<{ projectId: string }> }  // ← Changed to Promise
 ) {
-  const { projectId } = params;
-  const body = await req.json();
-  const { userId, content } = body;
-
-  // Log values received from frontend
-  console.log("POST body:", { projectId, userId, content });
-
-  if (!projectId || !userId || !content) {
-    return NextResponse.json({ error: "Missing fields" }, { status: 400 });
-  }
+  const { projectId } = await params;  // ← Added await
 
   try {
-    // Check if user exists
-    const userCheck = db.prepare("SELECT id FROM users WHERE id = ?");
-    const userExists = userCheck.get(userId);
-    
-    if (!userExists) {
-      console.error("User not found:", userId);
-      return NextResponse.json({ error: "User not found in database" }, { status: 404 });
+    const body = await req.json();
+    const { userId, content } = body;
+
+    if (!userId || !content) {
+      return NextResponse.json(
+        { error: "userId and content are required" },
+        { status: 400 }
+      );
     }
 
-    // Check if project exists
-    const projectCheck = db.prepare("SELECT id FROM projects WHERE id = ?");
-    const projectExists = projectCheck.get(projectId);
-    
-    if (!projectExists) {
-      console.error("Project not found:", projectId);
-      return NextResponse.json({ error: "Project not found in database" }, { status: 404 });
-    }
+    const id = randomUUID();
+    const now = new Date().toISOString();
 
     const stmt = db.prepare(`
-      INSERT INTO notes (id, user_id, project_id, content, created_at, updated_at, completed)
-      VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 0)
+      INSERT INTO notes (
+        id, user_id, project_id, content, 
+        completed, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 0, ?, ?)
     `);
-    stmt.run(randomUUID(), userId, projectId, content);
-  } catch (err) {
-    console.error("DB insert failed:", err);
-    return NextResponse.json({ error: "DB insert failed" }, { status: 500 });
-  }
 
-  return NextResponse.json({ success: true });
+    stmt.run(id, userId, projectId, content, now, now);
+
+    const newNote = db.prepare(`
+      SELECT 
+        n.id,
+        n.user_id,
+        n.project_id,
+        n.content,
+        n.created_at,
+        n.updated_at,
+        n.completed,
+        u.first_name,
+        u.last_name,
+        u.email
+      FROM notes n
+      LEFT JOIN users u ON n.user_id = u.id
+      WHERE n.id = ?
+    `).get(id);
+
+    return NextResponse.json(newNote, { status: 201 });
+  } catch (err) {
+    console.error("Failed to create note:", err);
+    return NextResponse.json({ error: "Failed to create note" }, { status: 500 });
+  }
 }

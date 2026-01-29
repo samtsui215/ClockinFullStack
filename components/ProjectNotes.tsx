@@ -9,15 +9,10 @@ interface Note {
   content: string;
   created_at: string;
   updated_at: string;
-  completed: boolean | number | string; // Database can return boolean, 0/1, or '0'/'1'/'true'/'false'
+  completed: boolean;
   first_name?: string;
   last_name?: string;
   email?: string;
-}
-
-// Normalized note with guaranteed boolean completed field
-interface NormalizedNote extends Omit<Note, 'completed'> {
-  completed: boolean;
 }
 
 interface ProjectNotesProps {
@@ -26,54 +21,36 @@ interface ProjectNotesProps {
 }
 
 export default function ProjectNotes({ projectId, currentUserId }: ProjectNotesProps) {
-  const [notes, setNotes] = useState<NormalizedNote[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
   const [newNote, setNewNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
   const [showModal, setShowModal] = useState(false);
 
-  // Convert any value to a proper boolean
-  const toBoolean = (value: any): boolean => {
-    // Handle explicit false values
-    if (value === false || value === 0 || value === '0' || value === 'false' || value === null || value === undefined) {
-      return false;
-    }
-    // Handle explicit true values
-    if (value === true || value === 1 || value === '1' || value === 'true') {
-      return true;
-    }
-    // Default to false for anything else
-    return false;
-  };
-
   // Fetch notes for the current project
-  const fetchNotes = async () => {
-    if (!projectId) return;
-    try {
-      const res = await fetch(`/api/notes/${projectId}`);
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as Note[];
-      
-      // DEBUG: Let's see what the API is actually returning
-      console.log("Raw data from API:", data);
-      console.log("First note completed value:", data[0]?.completed, "Type:", typeof data[0]?.completed);
-      
-      // Convert completed to true/false - handle various database return types
-      const notesWithBoolean = data.map(n => ({
-        ...n,
-        completed: toBoolean(n.completed),
-      }));
-      
-      console.log("After conversion:", notesWithBoolean);
-      
-      // Sort so incomplete notes are on top
-      setNotes(notesWithBoolean.sort((a, b) => Number(a.completed) - Number(b.completed)));
-    } catch (err) {
-      console.error("Failed to fetch notes:", err);
-      setNotes([]);
-    }
-  };
+const fetchNotes = async () => {
+  if (!projectId) return;
+  try {
+    const res = await fetch(`/api/notes/${projectId}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = (await res.json()) as Note[];
+    
+    // Convert completed to true/false
+    const notesWithBoolean = data.map(n => ({
+      ...n,
+      completed: !!n.completed, // <- this ensures it's a proper boolean
+    }));
+    
+    // Sort so incomplete notes are on top
+    setNotes(notesWithBoolean.sort((a, b) => Number(a.completed) - Number(b.completed)));
+  } catch (err) {
+    console.error("Failed to fetch notes:", err);
+    setNotes([]);
+  }
+};
+
+
 
   useEffect(() => {
     fetchNotes();
@@ -131,8 +108,8 @@ export default function ProjectNotes({ projectId, currentUserId }: ProjectNotesP
     }
   };
 
-  // Toggle completed - FIXED: This is the single source of truth for toggling
-  const toggleCompleted = async (note: NormalizedNote) => {
+  // Toggle completed
+  const toggleCompleted = async (note: Note) => {
     const newCompleted = !note.completed;
     try {
       const res = await fetch(`/api/notes/note/${note.id}`, {
@@ -153,7 +130,7 @@ export default function ProjectNotes({ projectId, currentUserId }: ProjectNotesP
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-md p-8 transition-shadow">
+     <div className="bg-white rounded-2xl shadow-md p-8 transition-shadow flex flex-col h-full">
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-semibold text-gray-900">Project Notes</h2>
@@ -166,7 +143,7 @@ export default function ProjectNotes({ projectId, currentUserId }: ProjectNotesP
       </div>
 
       {/* Notes List */}
-      <div className="space-y-4 max-h-[500px] overflow-y-auto">
+      <div className="flex-1 space-y-4 overflow-y-auto">
         {notes.length === 0 ? (
           <p className="text-gray-500 text-center py-8">
             No notes yet. Click "Add Note" to create one!
@@ -180,11 +157,27 @@ export default function ProjectNotes({ projectId, currentUserId }: ProjectNotesP
               <div className="flex justify-between items-start mb-2">
                 <div className="flex items-center gap-2 text-sm text-gray-600">
                   <input
-                    type="checkbox"
-                    checked={note.completed}
-                    onChange={() => toggleCompleted(note)}
-                    className="cursor-pointer"
-                  />
+      type="checkbox"
+      checked={note.completed}
+      onChange={async () => {
+        try {
+          const res = await fetch(`/api/notes/note/${note.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ completed: !note.completed }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          setNotes(prev =>
+            prev
+              .map(n => n.id === note.id ? { ...n, completed: !n.completed } : n)
+              .sort((a, b) => Number(a.completed) - Number(b.completed))
+          );
+        } catch (err) {
+          console.error("Failed to toggle completed:", err);
+        }
+      }}
+    />
+
                   <span className="font-medium text-gray-900">
                     {note.first_name} {note.last_name}
                   </span>
@@ -241,9 +234,7 @@ export default function ProjectNotes({ projectId, currentUserId }: ProjectNotesP
                   </div>
                 </div>
               ) : (
-                <p className={`text-gray-700 whitespace-pre-wrap ${note.completed ? 'line-through opacity-70' : ''}`}>
-                  {note.content}
-                </p>
+                <p className="text-gray-700 whitespace-pre-wrap">{note.content}</p>
               )}
             </div>
           ))

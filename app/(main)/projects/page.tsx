@@ -3,6 +3,15 @@ import React, { useEffect, useState } from 'react';
 import { Plus, FolderOpen, StickyNote, Check, Edit2, Trash2 } from 'lucide-react';
 import { auth } from '@/lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
+import { Lora } from 'next/font/google';
+
+const lora = Lora({ subsets: ['latin'] });
+
+interface Category {
+  id: string;
+  name: string;
+  created_at: string;
+}
 
 interface Project {
   id: string;
@@ -25,7 +34,7 @@ interface Note {
 
 const ProjectsPage = () => {
   const [user, setUser] = useState<User | null>(null);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
 
@@ -44,7 +53,9 @@ const ProjectsPage = () => {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editNoteContent, setEditNoteContent] = useState('');
 
-  // Auth
+  const userId = user?.uid;
+
+  // --- Auth ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -53,62 +64,92 @@ const ProjectsPage = () => {
     return () => unsubscribe();
   }, []);
 
-  // Use Firebase UID directly
-  const userId = user?.uid;
-
-  // Fetch projects
+  // --- Restore selection from localStorage ---
   useEffect(() => {
-    console.log('📦 Fetching projects...');
-    fetch('/api/projects')
-      .then(res => res.json())
-      .then((data: Project[]) => {
-        console.log('✅ Projects loaded:', data);
-        setProjects(data);
-        const uniqueCategories = Array.from(new Set(data.map(p => p.category)));
-        console.log('📁 Categories:', uniqueCategories);
-        setCategories(uniqueCategories);
-      })
-      .catch(err => {
-        console.error('❌ Failed to fetch projects:', err);
-      });
+    const savedCategory = localStorage.getItem('selectedCategory');
+    const savedProject = localStorage.getItem('selectedProject');
+
+    if (savedCategory) setSelectedCategory(savedCategory);
+    if (savedProject) setSelectedProject(JSON.parse(savedProject));
   }, []);
 
-  // Fetch notes when project is selected
+  // --- Persist selection to localStorage ---
+  useEffect(() => {
+    if (selectedCategory) localStorage.setItem('selectedCategory', selectedCategory);
+  }, [selectedCategory]);
+
+  useEffect(() => {
+    if (selectedProject) localStorage.setItem('selectedProject', JSON.stringify(selectedProject));
+  }, [selectedProject]);
+
+  // --- Fetch categories ---
+  useEffect(() => {
+    fetch('/api/categories')
+      .then(res => res.json())
+      .then((data: Category[]) => setCategories(data))
+      .catch(err => console.error('❌ Failed to fetch categories:', err));
+  }, []);
+
+  // --- Fetch projects ---
+  useEffect(() => {
+    fetch('/api/projects')
+      .then(res => res.json())
+      .then((data: Project[]) => setProjects(data))
+      .catch(err => console.error('❌ Failed to fetch projects:', err));
+  }, []);
+
+  // --- Fetch notes ---
   useEffect(() => {
     if (!selectedProject) return;
 
-    console.log('📝 Fetching notes for project:', selectedProject.id);
     fetch(`/api/notes/${selectedProject.id}`)
       .then(res => res.json())
       .then((data: Note[]) => {
-        console.log('✅ Notes loaded:', data);
         const notesWithBoolean = data.map(n => ({
           ...n,
           completed: Boolean(n.completed),
         }));
         setNotes(notesWithBoolean.sort((a, b) => Number(a.completed) - Number(b.completed)));
       })
-      .catch(err => {
-        console.error('❌ Failed to fetch notes:', err);
-      });
+      .catch(err => console.error('❌ Failed to fetch notes:', err));
   }, [selectedProject]);
 
-  // Add category
-  const handleAddCategory = () => {
+  // --- Add category ---
+  const handleAddCategory = async () => {
     if (!newCategoryName.trim()) return;
-    setCategories(prev => [...prev, newCategoryName]);
-    setNewCategoryName('');
-    setShowAddCategory(false);
+    try {
+      const res = await fetch('/api/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newCategoryName.trim() }),
+      });
+      if (res.ok) {
+        const newCategory = await res.json();
+        setCategories(prev => [...prev, newCategory]);
+        setNewCategoryName('');
+        setShowAddCategory(false);
+      } else {
+        const error = await res.json();
+        alert(`Failed to add category: ${error.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to add category');
+    }
   };
 
-  // Add project
+  // --- Add project ---
   const handleAddProject = async () => {
     if (!newProjectTitle.trim() || !newProjectCategory) return;
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newProjectTitle, category: newProjectCategory }),
+        body: JSON.stringify({ 
+          title: newProjectTitle, 
+          category: newProjectCategory,
+          created_by: userId 
+        }),
       });
       if (res.ok) {
         const newProject = await res.json();
@@ -116,50 +157,45 @@ const ProjectsPage = () => {
         setNewProjectTitle('');
         setNewProjectCategory('');
         setShowAddProject(false);
+      } else {
+        const error = await res.json();
+        alert(`Failed to add project: ${error.error}`);
       }
     } catch (err) {
-      console.error('Failed to add project:', err);
+      console.error(err);
+      alert('Failed to add project');
     }
   };
 
-  // Add note
+  // --- Add note ---
   const handleAddNote = async () => {
     if (!newNoteContent.trim() || !selectedProject || !userId) return;
-
-    console.log('Adding note with userId:', userId);
-
     try {
       const res = await fetch(`/api/notes/${selectedProject.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, content: newNoteContent }),
       });
-
       if (res.ok) {
         setNewNoteContent('');
         setShowAddNote(false);
-
-        // Refresh notes
+        // refresh notes
         const notesRes = await fetch(`/api/notes/${selectedProject.id}`);
         const data = await notesRes.json();
-
-        const notesWithBoolean = data.map((n: Note) => ({
-          ...n,
-          completed: Boolean(n.completed),
-        }));
-
         setNotes(
-          notesWithBoolean.sort((a: Note, b: Note) => Number(a.completed) - Number(b.completed))
+            data
+                .map((n: Note) => ({ ...n, completed: Boolean(n.completed) }))
+                .sort((a: Note, b: Note) => Number(a.completed) - Number(b.completed))
         );
       } else {
         console.error('Failed to add note:', await res.text());
       }
     } catch (err) {
-      console.error('Failed to add note:', err);
+      console.error(err);
     }
   };
 
-  // Toggle note completed
+  // --- Toggle completed ---
   const toggleCompleted = async (note: Note) => {
     const newCompleted = !note.completed;
     try {
@@ -170,30 +206,27 @@ const ProjectsPage = () => {
       });
       if (res.ok) {
         setNotes(prev =>
-          prev
-            .map(n => n.id === note.id ? { ...n, completed: newCompleted } : n)
-            .sort((a, b) => Number(a.completed) - Number(b.completed))
+          prev.map(n => n.id === note.id ? { ...n, completed: newCompleted } : n)
+              .sort((a, b) => Number(a.completed) - Number(b.completed))
         );
       }
     } catch (err) {
-      console.error('Failed to toggle completed:', err);
+      console.error(err);
     }
   };
 
-  // Delete note
+  // --- Delete note ---
   const handleDeleteNote = async (noteId: string) => {
     if (!window.confirm('Delete this note?')) return;
     try {
       const res = await fetch(`/api/notes/note/${noteId}`, { method: 'DELETE' });
-      if (res.ok) {
-        setNotes(prev => prev.filter(n => n.id !== noteId));
-      }
+      if (res.ok) setNotes(prev => prev.filter(n => n.id !== noteId));
     } catch (err) {
-      console.error('Failed to delete note:', err);
+      console.error(err);
     }
   };
 
-  // Edit note
+  // --- Edit note ---
   const handleEditNote = async (noteId: string) => {
     if (!editNoteContent.trim()) return;
     try {
@@ -208,11 +241,13 @@ const ProjectsPage = () => {
         setEditNoteContent('');
       }
     } catch (err) {
-      console.error('Failed to edit note:', err);
+      console.error(err);
     }
   };
 
-  const filteredProjects = selectedCategory ? projects.filter(p => p.category === selectedCategory) : [];
+  const filteredProjects = selectedCategory 
+    ? projects.filter(p => p.category === selectedCategory) 
+    : [];
 
   if (!user) {
     return (
@@ -223,34 +258,23 @@ const ProjectsPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-8">
+    <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-8 ${lora.className}`}>
       <div className="max-w-[1800px] mx-auto">
         <h1 className="text-4xl font-bold text-slate-800 mb-8 tracking-tight">
           Project Management
         </h1>
-
-{/*}
-        debugging into
-        <div className="mb-4 p-4 bg-white rounded-lg text-sm">
-          <p>User: {user.email}</p>
-          <p>Categories: {categories.length}</p>
-          <p>Projects: {projects.length}</p>
-          <p>Selected Category: {selectedCategory || 'None'}</p>
-          <p>Selected Project: {selectedProject?.title || 'None'}</p>
-        </div>
-        */}
 
         <div className="grid grid-cols-3 gap-6 h-[calc(100vh-280px)]">
           {/* Column 1: Categories */}
           <div className="bg-white rounded-2xl shadow-lg p-6 overflow-hidden flex flex-col border border-slate-200">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-slate-800 flex items-center gap-2">
-                <FolderOpen className="w-5 h-5 text-indigo-600" />
+                <FolderOpen className="w-5 h-5 text-[#1c3260]" />
                 Categories
               </h2>
               <button
                 onClick={() => setShowAddCategory(true)}
-                className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all hover:scale-105 active:scale-95"
+                className="p-2 bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad] transition-all hover:scale-105 active:scale-95"
               >
                 <Plus className="w-5 h-5" />
               </button>
@@ -258,24 +282,27 @@ const ProjectsPage = () => {
 
             <div className="flex-1 overflow-y-auto space-y-2">
               {categories.length === 0 ? (
-                <p className="text-slate-400 text-center py-8">No categories yet</p>
+                <div className="text-slate-400 text-center py-8">
+                  <p className="mb-2">No categories yet</p>
+                  <p className="text-sm">Click + to create one</p>
+                </div>
               ) : (
                 categories.map((category) => (
                   <button
-                    key={category}
+                    key={category.id}
                     onClick={() => {
-                      setSelectedCategory(category);
+                      setSelectedCategory(category.name);
                       setSelectedProject(null);
                     }}
                     className={`w-full text-left px-4 py-3 rounded-xl transition-all ${
-                      selectedCategory === category
-                        ? 'bg-indigo-600 text-white shadow-md scale-[1.02]'
+                      selectedCategory === category.name
+                        ? 'bg-[#1c3260] text-white shadow-md scale-[1.02]'
                         : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:scale-[1.01]'
                     }`}
                   >
-                    <span className="font-medium">{category}</span>
+                    <span className="font-medium">{category.name}</span>
                     <span className="ml-2 text-sm opacity-70">
-                      ({projects.filter(p => p.category === category).length})
+                      ({projects.filter(p => p.category === category.name).length})
                     </span>
                   </button>
                 ))
@@ -291,11 +318,18 @@ const ProjectsPage = () => {
                   placeholder="Category name..."
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddCategory();
+                    if (e.key === 'Escape') {
+                      setShowAddCategory(false);
+                      setNewCategoryName('');
+                    }
+                  }}
                 />
                 <div className="flex gap-2">
                   <button
                     onClick={handleAddCategory}
-                    className="flex-1 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                    className="flex-1 px-3 py-2 bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad] transition-colors"
                   >
                     Add
                   </button>
@@ -325,7 +359,7 @@ const ProjectsPage = () => {
                     setNewProjectCategory(selectedCategory);
                     setShowAddProject(true);
                   }}
-                  className="p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all hover:scale-105 active:scale-95"
+                  className="p-2 bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad] transition-all hover:scale-105 active:scale-95"
                 >
                   <Plus className="w-5 h-5" />
                 </button>
@@ -343,7 +377,7 @@ const ProjectsPage = () => {
                       onClick={() => setSelectedProject(project)}
                       className={`w-full text-left px-4 py-3 rounded-xl transition-all ${
                         selectedProject?.id === project.id
-                          ? 'bg-emerald-600 text-white shadow-md scale-[1.02]'
+                          ? 'bg-[#1c3260] text-white shadow-md scale-[1.02]'
                           : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:scale-[1.01]'
                       }`}
                     >
@@ -358,6 +392,7 @@ const ProjectsPage = () => {
               </div>
             )}
 
+            {/* ADD PROJECT FORM - THIS WAS MISSING! */}
             {showAddProject && (
               <div className="mt-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
                 <input
@@ -365,13 +400,20 @@ const ProjectsPage = () => {
                   value={newProjectTitle}
                   onChange={(e) => setNewProjectTitle(e.target.value)}
                   placeholder="Project name..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg mb-2 focus:outline-none focus:ring-2 focus:ring-[#1c3260]"
                   autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddProject();
+                    if (e.key === 'Escape') {
+                      setShowAddProject(false);
+                      setNewProjectTitle('');
+                    }
+                  }}
                 />
                 <div className="flex gap-2">
                   <button
                     onClick={handleAddProject}
-                    className="flex-1 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                    className="flex-1 px-3 py-2 bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad] transition-colors"
                   >
                     Add
                   </button>
@@ -393,13 +435,13 @@ const ProjectsPage = () => {
           <div className="bg-white rounded-2xl shadow-lg p-6 overflow-hidden flex flex-col border border-slate-200">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-slate-800 flex items-center gap-2">
-                <StickyNote className="w-5 h-5 text-amber-600" />
+                <StickyNote className="w-5 h-5 text-[#1c3260]" />
                 {selectedProject ? `${selectedProject.title} Notes` : 'Select a Project'}
               </h2>
               {selectedProject && (
                 <button
                   onClick={() => setShowAddNote(true)}
-                  className="p-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-all hover:scale-105 active:scale-95"
+                  className="p-2 bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad] transition-all hover:scale-105 active:scale-95"
                 >
                   <Plus className="w-5 h-5" />
                 </button>
@@ -427,8 +469,8 @@ const ProjectsPage = () => {
                           onClick={() => toggleCompleted(note)}
                           className={`mt-1 flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
                             note.completed
-                              ? 'bg-emerald-600 border-emerald-600'
-                              : 'border-slate-300 hover:border-emerald-600'
+                              ? 'bg-[#1c3260] border-[#1c3260]'
+                              : 'border-slate-300 hover:border-[#4062ad]'
                           }`}
                         >
                           {note.completed && <Check className="w-3 h-3 text-white" />}
@@ -450,13 +492,13 @@ const ProjectsPage = () => {
                               <textarea
                                 value={editNoteContent}
                                 onChange={(e) => setEditNoteContent(e.target.value)}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                className="w-full px-3 py-2 border border-slate-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-[#1c3260]"
                                 rows={3}
                               />
                               <div className="flex gap-2 mt-2">
                                 <button
                                   onClick={() => handleEditNote(note.id)}
-                                  className="px-3 py-1 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+                                  className="px-3 py-1 text-sm bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad]"
                                 >
                                   Save
                                 </button>
@@ -485,7 +527,7 @@ const ProjectsPage = () => {
                                 setEditingNoteId(note.id);
                                 setEditNoteContent(note.content);
                               }}
-                              className="p-1.5 text-slate-400 hover:text-blue-600 transition-colors"
+                              className="p-1.5 text-slate-400 hover:text-yellow-600 transition-colors"
                             >
                               <Edit2 className="w-4 h-4" />
                             </button>
@@ -514,14 +556,14 @@ const ProjectsPage = () => {
                   value={newNoteContent}
                   onChange={(e) => setNewNoteContent(e.target.value)}
                   placeholder="Write your note..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-amber-500 mb-2"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-[#1c3260]"
                   rows={4}
                   autoFocus
                 />
-                <div className="flex gap-2">
+                <div className="flex gap-2 mt-2">
                   <button
                     onClick={handleAddNote}
-                    className="flex-1 px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                    className="flex-1 px-3 py-2 bg-[#1c3260] text-white rounded-lg hover:bg-[#4062ad] transition-colors"
                   >
                     Add Note
                   </button>
