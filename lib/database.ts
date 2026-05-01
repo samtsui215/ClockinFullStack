@@ -1,10 +1,8 @@
 // lib/database.ts
 import Database from 'better-sqlite3';
 
-// Create SQLite database (creates a file called database.db)
 const db = new Database('database.db');
 
-// Initialize database tables
 export function initDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -55,10 +53,34 @@ export function initDatabase() {
       description TEXT,
       billable BOOLEAN DEFAULT 1,
       status TEXT DEFAULT 'draft',
+      clock_in DATETIME,
+      clock_out DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (project_id) REFERENCES projects(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS actions (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      time_entry_id TEXT,
+      user_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      description TEXT NOT NULL,
+      started_at DATETIME NOT NULL,
+      completed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (project_id) REFERENCES projects(id),
+      FOREIGN KEY (time_entry_id) REFERENCES time_entries(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS categories (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS notes (
@@ -75,6 +97,18 @@ export function initDatabase() {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
   `);
+
+  // Migrations for existing databases — silently skip if column already exists
+  const migrations = [
+    'ALTER TABLE time_entries ADD COLUMN clock_in DATETIME',
+    'ALTER TABLE time_entries ADD COLUMN clock_out DATETIME',
+    'ALTER TABLE actions ADD COLUMN accumulated_seconds INTEGER DEFAULT 0',
+    'ALTER TABLE actions ADD COLUMN carried_over INTEGER DEFAULT 0',
+    'ALTER TABLE actions ADD COLUMN last_resumed_at DATETIME',
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch { /* already exists */ }
+  }
 }
 
 export function createNote(

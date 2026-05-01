@@ -1,4 +1,3 @@
-// app/profile/components/RecentActivityCard.tsx
 import React from 'react';
 import { Clock, FileText, FolderOpen, CheckCircle2 } from 'lucide-react';
 
@@ -28,7 +27,8 @@ const activityColors = {
 
 export const RecentActivityCard: React.FC<RecentActivityCardProps> = ({ activities }) => {
   return (
-    <div className="bg-white rounded-2xl shadow-lg p-6 border border-slate-200">
+    /* font-lora added to the main container */
+    <div className="bg-white rounded-2xl shadow-lg p-6 border border-slate-200 font-lora">
       <div className="flex items-center gap-2 mb-6">
         <Clock className="w-5 h-5 text-[#1c3260]" />
         <h3 className="text-xl font-semibold text-slate-800">Recent Activity</h3>

@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+@theme {
+  /* This maps the CSS variable from layout.tsx to the lora font family */
+  --font-lora: var(--font-lora);
+}
+
+/* Optional: If you want Lora to be the default serif font */
+@theme {
+  --font-serif: var(--font-lora), ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+}

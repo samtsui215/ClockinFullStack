@@ -5,139 +5,116 @@ import db from "@/lib/database";
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId');
+    const userId = searchParams.get("userId");
 
     if (!userId) {
-      return NextResponse.json({ error: "User ID is required" }, { status: 400 });
+      return NextResponse.json({ error: "userId is required" }, { status: 400 });
     }
 
-    // Get current week start and end
+    // Week boundaries (Monday to now)
     const now = new Date();
-    const dayOfWeek = now.getDay();
+    const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...
+    const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
     const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - dayOfWeek);
+    weekStart.setDate(now.getDate() - daysFromMonday);
     weekStart.setHours(0, 0, 0, 0);
-    
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 7);
 
-    // Get last week's dates for comparison
-    const lastWeekStart = new Date(weekStart);
-    lastWeekStart.setDate(weekStart.getDate() - 7);
-    const lastWeekEnd = new Date(weekStart);
+    const prevWeekStart = new Date(weekStart);
+    prevWeekStart.setDate(weekStart.getDate() - 7);
+    const prevWeekEnd = new Date(weekStart);
 
-    // Total hours this week
-    const thisWeekHours = db.prepare(`
+    const weekStartISO = weekStart.toISOString();
+    const prevWeekStartISO = prevWeekStart.toISOString();
+    const prevWeekEndISO = prevWeekEnd.toISOString();
+
+    // Hours this week from time_entries
+    const hoursRow = db.prepare(`
       SELECT COALESCE(SUM(hours), 0) as total
       FROM time_entries
-      WHERE user_id = ? 
-        AND date >= ? 
-        AND date < ?
-    `).get(userId, weekStart.toISOString(), weekEnd.toISOString()) as { total: number };
+      WHERE user_id = ? AND clock_in >= ? AND status = 'completed'
+    `).get(userId, weekStartISO) as { total: number };
 
-    // Total hours last week
-    const lastWeekHours = db.prepare(`
+    const prevHoursRow = db.prepare(`
       SELECT COALESCE(SUM(hours), 0) as total
       FROM time_entries
-      WHERE user_id = ? 
-        AND date >= ? 
-        AND date < ?
-    `).get(userId, lastWeekStart.toISOString(), lastWeekEnd.toISOString()) as { total: number };
+      WHERE user_id = ? AND clock_in >= ? AND clock_in < ? AND status = 'completed'
+    `).get(userId, prevWeekStartISO, prevWeekEndISO) as { total: number };
 
-    // Notes created this week
-    const thisWeekNotes = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM notes
-      WHERE user_id = ? 
-        AND created_at >= ? 
-        AND created_at < ?
-    `).get(userId, weekStart.toISOString(), weekEnd.toISOString()) as { count: number };
+    // Actions created this week
+    const actionsCreatedRow = db.prepare(`
+      SELECT COUNT(*) as total
+      FROM actions
+      WHERE user_id = ? AND created_at >= ?
+    `).get(userId, weekStartISO) as { total: number };
 
-    // Notes created last week
-    const lastWeekNotes = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM notes
-      WHERE user_id = ? 
-        AND created_at >= ? 
-        AND created_at < ?
-    `).get(userId, lastWeekStart.toISOString(), lastWeekEnd.toISOString()) as { count: number };
+    const prevActionsCreatedRow = db.prepare(`
+      SELECT COUNT(*) as total
+      FROM actions
+      WHERE user_id = ? AND created_at >= ? AND created_at < ?
+    `).get(userId, prevWeekStartISO, prevWeekEndISO) as { total: number };
 
-    // Completed notes this week
-    const completedNotes = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM notes
-      WHERE user_id = ? 
-        AND completed = 1
-        AND updated_at >= ?
-        AND updated_at < ?
-    `).get(userId, weekStart.toISOString(), weekEnd.toISOString()) as { count: number };
+    // Actions completed this week
+    const actionsCompletedRow = db.prepare(`
+      SELECT COUNT(*) as total
+      FROM actions
+      WHERE user_id = ? AND completed_at >= ?
+    `).get(userId, weekStartISO) as { total: number };
 
-    // Active projects (UPDATED: Based on time clocked THIS WEEK)
-    const activeProjects = db.prepare(`
-      SELECT COUNT(DISTINCT p.id) as count
-      FROM projects p
-      INNER JOIN time_entries t ON p.id = t.project_id
-      WHERE t.user_id = ?
-        AND p.is_active = 1
-        AND t.date >= ? 
-        AND t.date < ?
-    `).get(userId, weekStart.toISOString(), weekEnd.toISOString()) as { count: number };
+    // Active projects this week (projects with time entries)
+    const activeProjectsRow = db.prepare(`
+      SELECT COUNT(DISTINCT project_id) as total
+      FROM time_entries
+      WHERE user_id = ? AND clock_in >= ?
+    `).get(userId, weekStartISO) as { total: number };
 
-    // Daily breakdown for the week
-    const dailyHours = [];
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
-    for (let i = 0; i < 7; i++) {
+    // Daily hours for the current week (Mon–Sun)
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const dailyHours = days.map((day, i) => {
       const dayStart = new Date(weekStart);
       dayStart.setDate(weekStart.getDate() + i);
       const dayEnd = new Date(dayStart);
       dayEnd.setDate(dayStart.getDate() + 1);
 
-      // Note: Check your time_entries table schema - adjust column names if needed
-      // Common columns: hours, duration, time_spent, etc.
-      const result = db.prepare(`
-        SELECT COALESCE(SUM(hours), 0) as hours
+      const row = db.prepare(`
+        SELECT COALESCE(SUM(hours), 0) as total
         FROM time_entries
-        WHERE user_id = ? 
-          AND date >= ? 
-          AND date < ?
-      `).get(userId, dayStart.toISOString(), dayEnd.toISOString()) as { hours: number };
+        WHERE user_id = ? AND clock_in >= ? AND clock_in < ? AND status = 'completed'
+      `).get(userId, dayStart.toISOString(), dayEnd.toISOString()) as { total: number };
 
-      dailyHours.push({
-        day: days[i],
-        hours: Number(result.hours.toFixed(1)),
-      });
-    }
+      return { day, hours: Math.round(row.total * 10) / 10 };
+    });
 
-    // Calculate trends
-    const hoursTrend = lastWeekHours.total > 0
-      ? (((thisWeekHours.total - lastWeekHours.total) / lastWeekHours.total) * 100).toFixed(1)
-      : thisWeekHours.total > 0 ? '100.0' : '0.0';
+    // Compute trends
+    const hoursDiff = hoursRow.total - prevHoursRow.total;
+    const actionsDiff = actionsCreatedRow.total - prevActionsCreatedRow.total;
 
-    const notesTrend = lastWeekNotes.count > 0
-      ? (((thisWeekNotes.count - lastWeekNotes.count) / lastWeekNotes.count) * 100).toFixed(1)
-      : thisWeekNotes.count > 0 ? '100.0' : '0.0';
+    const hoursTrend = prevHoursRow.total === 0
+      ? { value: '+0%', isPositive: true }
+      : {
+          value: `${hoursDiff >= 0 ? '+' : ''}${Math.round((hoursDiff / prevHoursRow.total) * 100)}%`,
+          isPositive: hoursDiff >= 0,
+        };
+
+    const actionsTrend = prevActionsCreatedRow.total === 0
+      ? { value: '+0%', isPositive: true }
+      : {
+          value: `${actionsDiff >= 0 ? '+' : ''}${Math.round((actionsDiff / prevActionsCreatedRow.total) * 100)}%`,
+          isPositive: actionsDiff >= 0,
+        };
 
     return NextResponse.json({
       thisWeek: {
-        hours: Number(thisWeekHours.total.toFixed(1)),
-        notes: thisWeekNotes.count,
-        completedNotes: completedNotes.count,
-        activeProjects: activeProjects.count,
+        hours: Math.round(hoursRow.total * 10) / 10,
+        notes: actionsCreatedRow.total,
+        completedNotes: actionsCompletedRow.total,
+        activeProjects: activeProjectsRow.total,
       },
       trends: {
-        hours: {
-          value: `${Math.abs(Number(hoursTrend))}%`,
-          isPositive: Number(hoursTrend) >= 0,
-        },
-        notes: {
-          value: `${Math.abs(Number(notesTrend))}%`,
-          isPositive: Number(notesTrend) >= 0,
-        },
+        hours: hoursTrend,
+        notes: actionsTrend,
       },
       dailyHours,
     });
-
   } catch (err) {
     console.error("Failed to fetch profile stats:", err);
     return NextResponse.json({ error: "Failed to fetch profile stats" }, { status: 500 });

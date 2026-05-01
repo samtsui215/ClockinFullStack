@@ -52,6 +52,15 @@ export async function POST(req: Request) {
       now
     );
 
+    // Resume any carried-over actions for this user+project
+    if (project_id) {
+      db.prepare(`
+        UPDATE actions
+        SET last_resumed_at = ?, carried_over = 0
+        WHERE user_id = ? AND project_id = ? AND carried_over = 1 AND completed_at IS NULL
+      `).run(now, user_id, project_id);
+    }
+
     // Return the created entry
     const newEntry = db.prepare(`
       SELECT 

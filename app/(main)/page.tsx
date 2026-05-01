@@ -10,7 +10,7 @@ export default async function HomePage() {
   if (!user){
     redirect('/sign-in');
   } else {
-    redirect('dashboard');
+    redirect('/dashboard');
   }
 
 

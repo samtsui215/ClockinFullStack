@@ -1,4 +1,3 @@
-// app/profile/ProfileClient.tsx
 'use client';
 import React, { useEffect, useState } from 'react';
 import { 
@@ -63,18 +62,15 @@ export function ProfileClient({ user }: ProfileClientProps) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Fetch stats and activity on mount
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch stats
         const statsRes = await fetch(`/api/profile/stats?userId=${user.id}`);
         if (statsRes.ok) {
           const statsData = await statsRes.json();
           setStats(statsData);
         }
 
-        // Fetch activity
         const activityRes = await fetch(`/api/profile/activity?userId=${user.id}&limit=5`);
         if (activityRes.ok) {
           const activityData = await activityRes.json();
@@ -90,7 +86,6 @@ export function ProfileClient({ user }: ProfileClientProps) {
     fetchData();
   }, [user.id]);
 
-  // Format user data for ProfileInfoCard
   const userForDisplay = {
     id: user.id,
     firstName: user.firstName,
@@ -98,11 +93,13 @@ export function ProfileClient({ user }: ProfileClientProps) {
     email: user.email,
     isActive: user.isActive,
     createdAt: user.createdAt,
+    userType: user.userType,
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-8">
-      <div className="max-w-[1800px] mx-auto">
+    /* font-lora added below to the main container */
+    <div className="min-h-screen overflow-y-auto bg-linear-to-br from-slate-50 via-blue-50 to-indigo-50 p-8 font-lora">
+      <div className="max-w-450 mx-auto">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-slate-800 tracking-tight mb-2">
@@ -112,12 +109,12 @@ export function ProfileClient({ user }: ProfileClientProps) {
 
         {/* Main Grid Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          {/* Left Column - Profile Info (spans 1 column) */}
+          {/* Left Column - Profile Info */}
           <div className="lg:col-span-1">
             <ProfileInfoCard user={userForDisplay} />
           </div>
 
-          {/* Right Column - Stats Overview (spans 2 columns) */}
+          {/* Right Column - Stats Overview */}
           <div className="lg:col-span-2 space-y-6">
             {loading ? (
               <div className="flex items-center justify-center h-64">
@@ -139,7 +136,7 @@ export function ProfileClient({ user }: ProfileClientProps) {
                     color="#1c3260"
                   />
                   <StatsCard
-                    title="Notes Created"
+                    title="Actions Created"
                     value={stats?.thisWeek.notes || 0}
                     subtitle="This week"
                     icon={FileText}
@@ -147,7 +144,7 @@ export function ProfileClient({ user }: ProfileClientProps) {
                     color="#3b82f6"
                   />
                   <StatsCard
-                    title="Tasks Completed"
+                    title="Actions Completed"
                     value={stats?.thisWeek.completedNotes || 0}
                     subtitle="This week"
                     icon={CheckCircle2}

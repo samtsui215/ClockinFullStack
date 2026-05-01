@@ -11,30 +11,27 @@ interface HoursWorkedProps {
 export default function HoursWorkedCard({ hoursWorked }: HoursWorkedProps) {
   return (
     <Link href="/profile">
-      <div className="cursor-pointer bg-white rounded-2xl shadow-md p-6 hover:shadow-lg transition-shadow max-w-sm w-70 h-full flex flex-col justify-between">
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900">
-            Hours Worked
-          </h2>
-          <p className="text-xs text-gray-400 mt-1 mb-4">
-            Recorded this week
-          </p>
-        </div>
-
-        <div className="flex items-center justify-between pr-1">
-          <p className="text-[#1c3260] text-5xl font-bold">
-            {hoursWorked}
-          </p>
-          <div className="bg-blue-50 p-3 rounded-full">
+      <div className="cursor-pointer bg-white rounded-2xl shadow-md p-5 hover:shadow-lg transition-shadow w-full flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+              Hours This Week
+            </h2>
+            <p className="text-[#1c3260] text-4xl font-bold mt-1">
+              {hoursWorked}
+            </p>
+          </div>
+          <div className="bg-blue-50 p-3 rounded-full flex-shrink-0">
             <Image
               src="/clock.png"
               alt="Clock icon"
-              width={40}
-              height={40}
+              width={32}
+              height={32}
               className="object-contain"
             />
           </div>
         </div>
+        <p className="text-xs text-[#1c3260] font-medium">View Profile →</p>
       </div>
     </Link>
   );

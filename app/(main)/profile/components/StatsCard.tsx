@@ -1,4 +1,4 @@
-// app/profile/components/StatsCard.tsx
+'use client';
 import React from 'react';
 import { LucideIcon } from 'lucide-react';
 
@@ -23,7 +23,8 @@ export const StatsCard: React.FC<StatsCardProps> = ({
   color = '#1c3260',
 }) => {
   return (
-    <div className="bg-white rounded-2xl shadow-lg p-6 border border-slate-200 hover:shadow-xl transition-all hover:scale-[1.02]">
+    /* font-lora added to the main container */
+    <div className="bg-white rounded-2xl shadow-lg p-6 border border-slate-200 hover:shadow-xl transition-all hover:scale-[1.02] font-lora">
       <div className="flex items-start justify-between mb-4">
         <div className="flex-1">
           <p className="text-sm font-medium text-slate-600 mb-1">{title}</p>

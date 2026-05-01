@@ -1,4 +1,3 @@
-// app/profile/components/WeeklyProductivityChart.tsx
 import React from 'react';
 import { TrendingUp } from 'lucide-react';
 
@@ -13,7 +12,8 @@ export const WeeklyProductivityChart: React.FC<WeeklyProductivityChartProps> = (
   const maxHours = Math.max(...data.map(d => d.hours), 8);
   
   return (
-    <div className="bg-white rounded-2xl shadow-lg p-6 border border-slate-200">
+    /* font-lora added to the main container */
+    <div className="bg-white rounded-2xl shadow-lg p-6 border border-slate-200 font-lora">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <TrendingUp className="w-5 h-5 text-[#1c3260]" />
@@ -42,6 +42,7 @@ export const WeeklyProductivityChart: React.FC<WeeklyProductivityChartProps> = (
                 >
                   {/* Tooltip on hover */}
                   <div className="absolute -top-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {/* Tooltip text also inherits Lora */}
                     <div className="bg-slate-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
                       {item.hours}h
                     </div>

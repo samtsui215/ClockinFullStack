@@ -1,7 +1,7 @@
 'use client';
 import React, { useRef, useEffect, useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronRight, ArrowLeft } from "lucide-react";
+import { ChevronRight, ArrowLeft, X } from "lucide-react";
 
 interface Project {
   id: string;
@@ -25,17 +25,12 @@ export default function ProjectInformation({
   const [showModal, setShowModal] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
-  // Group projects by category
   const categorizedProjects = useMemo(() => {
     const categories: { [key: string]: Project[] } = {};
-    
     projects.forEach((p) => {
-      if (!categories[p.category]) {
-        categories[p.category] = [];
-      }
+      if (!categories[p.category]) categories[p.category] = [];
       categories[p.category].push(p);
     });
-    
     return categories;
   }, [projects]);
 
@@ -51,48 +46,32 @@ export default function ProjectInformation({
     return () => resizeObserver.disconnect();
   }, [project]);
 
-  // Handle opening modal
   const handleOpenModal = () => {
     setShowModal(true);
     setSelectedCategory(null);
   };
 
-  // Handle closing modal
   const handleCloseModal = () => {
     setShowModal(false);
     setSelectedCategory(null);
   };
 
-  // Handle selecting a category
-  const handleCategoryClick = (category: string) => {
-    setSelectedCategory(category);
-  };
-
-  // Handle going back to categories
-  const handleBackToCategories = () => {
-    setSelectedCategory(null);
-  };
-
-  // Handle selecting a project
+  // When user picks a project, pass it up to DashboardClient.
+  // DashboardClient decides whether to show the switch modal or just select.
   const handleProjectSelect = (projectId: string) => {
+    handleCloseModal();
     if (projectId !== project.id) {
       onProjectChange(projectId);
     }
-    handleCloseModal();
   };
 
-  // Handle escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (selectedCategory) {
-          setSelectedCategory(null);
-        } else {
-          handleCloseModal();
-        }
+        if (selectedCategory) setSelectedCategory(null);
+        else handleCloseModal();
       }
     };
-
     if (showModal) {
       window.addEventListener('keydown', handleEscape);
       return () => window.removeEventListener('keydown', handleEscape);
@@ -123,10 +102,9 @@ export default function ProjectInformation({
         Change Project
       </Button>
 
-      {/* Full-screen modal */}
       {showModal && (
         <div 
-          className="fixed inset-0 bg-gray-500 bg-opacity-30 backdrop-blur-md flex items-center justify-center z-50 animate-in fade-in duration-200"
+          className="fixed inset-0 bg-gray-500 bg-opacity-30 backdrop-blur-md flex items-center justify-center z-40 animate-in fade-in duration-200"
           onClick={handleCloseModal}
         >
           <div 
@@ -137,14 +115,14 @@ export default function ProjectInformation({
             <div className="flex items-center mb-4">
               {selectedCategory ? (
                 <button
-                  onClick={handleBackToCategories}
+                  onClick={() => setSelectedCategory(null)}
                   className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 transition-colors mr-auto"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   <span>Back</span>
                 </button>
               ) : (
-                <div className="mr-auto"></div>
+                <div className="mr-auto" />
               )}
               
               <h3 className="text-xl font-semibold text-gray-900 absolute left-1/2 -translate-x-1/2">
@@ -153,25 +131,23 @@ export default function ProjectInformation({
 
               <button
                 onClick={handleCloseModal}
-                className="ml-auto text-gray-400 hover:text-gray-600 text-xl font-bold w-6 h-6 flex items-center justify-center"
+                className="ml-auto text-gray-400 hover:text-gray-600 w-6 h-6 flex items-center justify-center"
               >
-                ×
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Content */}
             <div className="max-h-[60vh] overflow-y-auto">
               {!selectedCategory ? (
-                // Show Categories
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {categories.map((category) => {
                     const projectCount = categorizedProjects[category].length;
                     const isCurrentCategory = category === project.category;
-
                     return (
                       <div
                         key={category}
-                        onClick={() => handleCategoryClick(category)}
+                        onClick={() => setSelectedCategory(category)}
                         className={`group relative p-4 border rounded-lg cursor-pointer transition-all hover:scale-[1.02] ${
                           isCurrentCategory
                             ? 'border-[#1c3260] bg-blue-50'
@@ -180,21 +156,16 @@ export default function ProjectInformation({
                       >
                         <div className="flex items-center justify-between">
                           <div>
-                            <h4 className="font-semibold text-gray-900 mb-0.5 text-sm">
-                              {category}
-                            </h4>
-                            
+                            <h4 className="font-semibold text-gray-900 mb-0.5 text-sm">{category}</h4>
                             <p className="text-xs text-gray-500">
                               {projectCount} {projectCount === 1 ? 'project' : 'projects'}
                             </p>
                           </div>
-
                           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-[#1c3260] transition-colors flex-shrink-0" />
                         </div>
-
                         {isCurrentCategory && (
                           <div className="absolute top-3 right-3">
-                            <div className="w-1.5 h-1.5 rounded-full bg-[#1c3260]"></div>
+                            <div className="w-1.5 h-1.5 rounded-full bg-[#1c3260]" />
                           </div>
                         )}
                       </div>
@@ -202,11 +173,9 @@ export default function ProjectInformation({
                   })}
                 </div>
               ) : (
-                // Show Projects in Selected Category
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {categorizedProjects[selectedCategory].map((p) => {
                     const isCurrentProject = p.id === project.id;
-
                     return (
                       <div
                         key={p.id}
@@ -219,14 +188,9 @@ export default function ProjectInformation({
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex-1 min-w-0">
-                            <p className="font-medium text-gray-900 text-sm truncate">
-                              {p.title}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-0.5">
-                              {p.category}
-                            </p>
+                            <p className="font-medium text-gray-900 text-sm truncate">{p.title}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">{p.category}</p>
                           </div>
-
                           {isCurrentProject && (
                             <span className="flex-shrink-0 px-2 py-0.5 rounded-full bg-[#1c3260] text-white text-xs font-medium">
                               Current
@@ -240,12 +204,12 @@ export default function ProjectInformation({
               )}
             </div>
 
-            {/* Footer hint */}
+            {/* Footer */}
             <div className="mt-4 pt-3 border-t border-gray-100">
               <p className="text-xs text-gray-400 text-center">
-                {selectedCategory 
+                {selectedCategory
                   ? `${categorizedProjects[selectedCategory].length} projects in ${selectedCategory}`
-                  : `${categories.length} categories • ${projects.length} total projects`
+                  : `${categories.length} categories · ${projects.length} total projects`
                 }
               </p>
             </div>

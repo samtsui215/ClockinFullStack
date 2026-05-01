@@ -19,8 +19,8 @@ export interface User {
   createdAt: string;
   status?: string;
   needsSetup?: boolean;
-  userType?: string;  // Add this for your user management
-  firstName?: string; // Add these if you need them
+  userType?: string;
+  firstName?: string;
   lastName?: string;
   weeklyCapacity?: number;
   isActive?: boolean;
@@ -32,13 +32,9 @@ export async function signIn(params: SignInParams) {
   try {
     const userRecord = await auth.getUserByEmail(email);
     if (!userRecord) {
-      return {
-        success: false,
-        message: "User does not exist.",
-      };
+      return { success: false, message: "User does not exist." };
     }
 
-    // Create a Firebase session cookie
     const sessionCookie = await auth.createSessionCookie(idToken, {
       expiresIn: ONE_WEEK * 1000,
     });
@@ -68,40 +64,45 @@ export async function getCurrentUser() {
     if (!sessionCookie) return null;
 
     const decodedClaims = await auth.verifySessionCookie(sessionCookie, false);
-    
-    // 1. First try to get user from SQL database
+
+    // 1. Try to get user from SQL database
     const sqlUser = await getSQLUser(decodedClaims.uid);
+
     if (sqlUser) {
+      // If user has been deactivated, clear their session and return null
+      // SQLite returns 0/1 for booleans, so we coerce with == instead of ===
+      if (!sqlUser.isActive) {
+        const cookieStore = await cookies();
+        cookieStore.set({ name: "session", value: "", maxAge: 0, path: "/" });
+        return null;
+      }
       return sqlUser;
     }
-    
+
     // 2. If not in SQL, get from Firebase and add to SQL
     const userRecord = await auth.getUser(decodedClaims.uid);
-    
-    // Extract first and last name from displayName or email
+
     const displayName = userRecord.displayName || '';
     const nameParts = displayName.split(' ');
     const firstName = nameParts[0] || userRecord.email?.split('@')[0] || 'User';
     const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
-    
+
     await addUserToSQL({
       id: decodedClaims.uid,
       email: userRecord.email || '',
-      firstName: firstName,
-      lastName: lastName,
-      userType: 'employee' // default role
+      firstName,
+      lastName,
+      userType: 'employee',
     });
 
-    // 3. Return the newly created SQL user
     return await getSQLUser(decodedClaims.uid);
 
   } catch (error) {
     console.error("Error in getCurrentUser:", error);
-    const cookieStore = await cookies();
-    //cookieStore.set({ name: "session", value: "", maxAge: 0, path: "/" });
     return null;
   }
 }
+
 export async function isAuthenticated() {
   const user = await getCurrentUser();
   return !!user;
@@ -109,15 +110,9 @@ export async function isAuthenticated() {
 
 export async function signOut() {
   const cookieStore = await cookies();
-  cookieStore.set({
-    name: "session",
-    value: "",
-    maxAge: 0,
-    path: "/",
-  });
+  cookieStore.set({ name: "session", value: "", maxAge: 0, path: "/" });
 }
 
-// For future admin use - not exposed in UI yet
 export async function createUserAccount(userData: {
   email: string;
   password: string;
@@ -142,16 +137,9 @@ export async function createUserAccount(userData: {
       lastLogin: null,
     });
 
-    return { 
-      success: true, 
-      userId: userRecord.uid,
-      message: "User account created successfully" 
-    };
-    
+    return { success: true, userId: userRecord.uid, message: "User account created successfully" };
   } catch (error) {
     console.error("Error creating user account:", error);
-    return { 
-      success: false
-    };
+    return { success: false };
   }
 }
