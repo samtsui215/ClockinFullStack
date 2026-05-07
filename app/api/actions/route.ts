@@ -2,15 +2,18 @@
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { randomUUID } from "crypto";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId');
     const projectId = searchParams.get('projectId');
 
-    if (!userId || !projectId) {
-      return NextResponse.json({ error: "userId and projectId are required" }, { status: 400 });
+    if (!projectId) {
+      return NextResponse.json({ error: "projectId is required" }, { status: 400 });
     }
 
     const actions = db.prepare(`
@@ -20,7 +23,7 @@ export async function GET(req: Request) {
       FROM actions
       WHERE user_id = ? AND project_id = ? AND completed_at IS NULL
       ORDER BY started_at ASC
-    `).all(userId, projectId);
+    `).all(sessionUser.id, projectId);
 
     return NextResponse.json(actions);
   } catch (err) {
@@ -30,18 +33,21 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const body = await req.json();
-    const { user_id, project_id, description, time_entry_id, group_id, retroactive, duration_minutes } = body;
+    const { project_id, description, time_entry_id, group_id, retroactive, duration_minutes } = body;
+    const user_id = sessionUser.id;
 
-    if (!user_id || !project_id || !description?.trim()) {
+    if (!project_id || !description?.trim()) {
       return NextResponse.json(
-        { error: "user_id, project_id and description are required" },
+        { error: "project_id and description are required" },
         { status: 400 }
       );
     }
 
-    // Retroactive: log a missed action against a past session
     if (retroactive) {
       if (!time_entry_id || !duration_minutes || duration_minutes <= 0) {
         return NextResponse.json(
@@ -77,7 +83,6 @@ export async function POST(req: Request) {
       return NextResponse.json(db.prepare(`SELECT * FROM actions WHERE id = ?`).get(id), { status: 201 });
     }
 
-    // Normal: add action to active session
     const id = randomUUID();
     const resolvedGroupId = group_id || randomUUID();
     const now = new Date().toISOString();

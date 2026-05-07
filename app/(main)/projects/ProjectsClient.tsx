@@ -1,7 +1,7 @@
 // app/projects/ProjectsClient.tsx
 'use client';
 import React, { useEffect, useState, useCallback } from 'react';
-import { Plus, FolderOpen, Layers, Clock, CheckCircle2, Edit2, Trash2, Check, X, Users, Timer } from 'lucide-react';
+import { Plus, FolderOpen, Layers, Clock, CheckCircle2, Edit2, Trash2, Check, X, Users, Timer, ChevronDown, History } from 'lucide-react';
 import { Lora } from 'next/font/google';
 
 const lora = Lora({ subsets: ['latin'] });
@@ -34,9 +34,20 @@ interface Action {
   description: string;
   started_at: string;
   completed_at: string | null;
+  carried_over?: number;
   first_name?: string;
   last_name?: string;
   email?: string;
+}
+
+interface PastSession {
+  id: string;
+  clock_in: string;
+  clock_out: string;
+  hours: number;
+  project_id: string;
+  project_title: string;
+  display_label: string;
 }
 
 interface ActionGroup {
@@ -68,6 +79,17 @@ interface ActiveUser {
   firstName: string;
   lastName: string;
   clockedInSince: string;
+}
+
+interface TeamActiveSession {
+  entry_id: string;
+  clock_in: string;
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  project_id: string;
+  project_title: string;
+  project_category: string;
 }
 
 interface ProjectsClientProps {
@@ -114,6 +136,7 @@ function formatElapsed(iso: string) {
 
 export default function ProjectsClient({ user }: ProjectsClientProps) {
   const isAdmin = user.userType === 'admin';
+  const isElevated = isAdmin || user.userType === 'manager';
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -122,6 +145,30 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
   const [projectUserStats, setProjectUserStats] = useState<ProjectUserStat[]>([]);
   const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
   const [loadingStats, setLoadingStats] = useState(false);
+
+  const [teamActivity, setTeamActivity] = useState<TeamActiveSession[]>([]);
+  const [teamActivityOpen, setTeamActivityOpen] = useState(false);
+  const [loadingTeamActivity, setLoadingTeamActivity] = useState(false);
+
+  // Active entry (to know if user is clocked in and to which project)
+  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
+  const [clockedInProjectId, setClockedInProjectId] = useState<string | null>(null);
+
+  // Add action inline form
+  const [showAddActionForm, setShowAddActionForm] = useState(false);
+  const [newActionText, setNewActionText] = useState('');
+  const [addActionLoading, setAddActionLoading] = useState(false);
+
+  // Log Past Action modal
+  const [showLogPastModal, setShowLogPastModal] = useState(false);
+  const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
+  const [pastSessionsLoading, setPastSessionsLoading] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [pastDesc, setPastDesc] = useState('');
+  const [pastHours, setPastHours] = useState('0');
+  const [pastMinutes, setPastMinutes] = useState('0');
+  const [logPastLoading, setLogPastLoading] = useState(false);
+  const [logPastError, setLogPastError] = useState('');
 
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -137,6 +184,125 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
   const [editText, setEditText] = useState('');
 
   const userId = user.id;
+
+  const fetchTeamActivity = useCallback(async () => {
+    if (!isElevated) return;
+    setLoadingTeamActivity(true);
+    try {
+      const res = await fetch('/api/admin/team-activity');
+      if (res.ok) {
+        const data = await res.json();
+        setTeamActivity(data.activeSessions ?? []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch team activity:', err);
+    } finally {
+      setLoadingTeamActivity(false);
+    }
+  }, [isElevated]);
+
+  useEffect(() => {
+    if (isElevated) fetchTeamActivity();
+  }, [isElevated, fetchTeamActivity]);
+
+  const fetchActiveEntry = useCallback(async () => {
+    try {
+      const res = await fetch('/api/time_entries/active');
+      const data = await res.json();
+      setActiveEntryId(data?.id ?? null);
+      setClockedInProjectId(data?.project_id ?? null);
+    } catch (err) {
+      console.error('Failed to fetch active entry:', err);
+    }
+  }, [userId]);
+
+  useEffect(() => { fetchActiveEntry(); }, [fetchActiveEntry]);
+
+  const handleAddAction = async () => {
+    if (!newActionText.trim() || !selectedProject) return;
+    const userActiveGroupId = actions.find(
+      a => a.user_id === userId && !a.completed_at && !a.carried_over
+    )?.group_id ?? null;
+    setAddActionLoading(true);
+    try {
+      const res = await fetch('/api/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: selectedProject.id,
+          description: newActionText.trim(),
+          time_entry_id: activeEntryId,
+          group_id: userActiveGroupId,
+        }),
+      });
+      if (res.ok) {
+        setNewActionText('');
+        setShowAddActionForm(false);
+        fetchActions();
+      }
+    } catch (err) {
+      console.error('Failed to add action:', err);
+    } finally {
+      setAddActionLoading(false);
+    }
+  };
+
+  const openLogPastModal = async () => {
+    setShowLogPastModal(true);
+    setPastSessionsLoading(true);
+    try {
+      const res = await fetch('/api/time_entries/history?limit=10');
+      if (res.ok) {
+        const data = await res.json();
+        setPastSessions(data);
+        if (data.length > 0) setSelectedSessionId(data[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to fetch history:', err);
+    } finally {
+      setPastSessionsLoading(false);
+    }
+  };
+
+  const handleLogPastAction = async () => {
+    setLogPastError('');
+    if (!pastDesc.trim()) { setLogPastError('Please describe what you worked on.'); return; }
+    if (!selectedSessionId) { setLogPastError('Please select a session.'); return; }
+    const durationMinutes = parseInt(pastHours || '0') * 60 + parseInt(pastMinutes || '0');
+    if (durationMinutes <= 0) { setLogPastError('Duration must be at least 1 minute.'); return; }
+    const session = pastSessions.find(s => s.id === selectedSessionId);
+    if (!session) { setLogPastError('Session not found.'); return; }
+    if (durationMinutes > Math.ceil(session.hours * 60) + 5) {
+      setLogPastError(`Duration can't exceed the session length (${Math.floor(session.hours)}h ${Math.round((session.hours % 1) * 60)}m).`);
+      return;
+    }
+    setLogPastLoading(true);
+    try {
+      const res = await fetch('/api/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: session.project_id,
+          description: pastDesc.trim(),
+          time_entry_id: selectedSessionId,
+          duration_minutes: durationMinutes,
+          retroactive: true,
+        }),
+      });
+      if (res.ok) {
+        setShowLogPastModal(false);
+        setPastDesc(''); setPastHours('0'); setPastMinutes('0'); setSelectedSessionId(''); setLogPastError('');
+        fetchActions();
+      } else {
+        const data = await res.json();
+        setLogPastError(data.error || 'Failed to log action.');
+      }
+    } catch {
+      setLogPastError('An error occurred. Please try again.');
+    } finally {
+      setLogPastLoading(false);
+    }
+  };
 
   useEffect(() => {
     const savedCategory = localStorage.getItem('selectedCategory');
@@ -180,7 +346,7 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
   useEffect(() => { fetchActions(); }, [fetchActions]);
 
   const fetchProjectStats = useCallback(async () => {
-    if (!selectedProject || !isAdmin) return;
+    if (!selectedProject || !isElevated) return;
     setLoadingStats(true);
     try {
       const res = await fetch(`/api/admin/project-stats/${selectedProject.id}`);
@@ -194,7 +360,7 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
     } finally {
       setLoadingStats(false);
     }
-  }, [selectedProject, isAdmin]);
+  }, [selectedProject, isElevated]);
 
   useEffect(() => {
     if (adminView === 'users') fetchProjectStats();
@@ -265,11 +431,55 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
   const actionGroups = groupActions(actions);
   const inProgressGroups = actionGroups.filter(g => !g.completed_at);
   const completedGroups = actionGroups.filter(g => g.completed_at);
+  const isClockedIn = clockedInProjectId !== null;
+  const isClockedInToSelectedProject = clockedInProjectId === selectedProject?.id;
 
   return (
     <div className={`h-full overflow-hidden bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-8 flex flex-col ${lora.className}`}>
       <div className="max-w-[1800px] mx-auto w-full flex flex-col flex-1 min-h-0">
         <h1 className="text-4xl font-bold text-slate-800 mb-8 tracking-tight flex-shrink-0">Project Management</h1>
+
+        {isElevated && (
+          <div className="mb-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex-shrink-0">
+            <button
+              onClick={() => { setTeamActivityOpen(o => !o); if (!teamActivityOpen) fetchTeamActivity(); }}
+              className="w-full flex items-center justify-between px-5 py-3"
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+                <span className="text-sm font-semibold text-slate-800">All Activity</span>
+                {teamActivity.length > 0 && (
+                  <span className="text-xs bg-emerald-100 text-emerald-700 rounded-full px-2 py-0.5 font-semibold">{teamActivity.length} working now</span>
+                )}
+              </div>
+              <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${teamActivityOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {teamActivityOpen && (
+              <div className="px-5 pb-4 border-t border-slate-100 pt-3">
+                {loadingTeamActivity ? (
+                  <p className="text-xs text-slate-400">Loading...</p>
+                ) : teamActivity.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-1">No one is clocked in right now.</p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                    {teamActivity.map(s => (
+                      <div key={s.entry_id} className="flex items-center gap-2 bg-slate-50 rounded-xl p-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#1c3260] to-[#4062ad] text-white text-xs flex items-center justify-center font-bold flex-shrink-0">
+                          {s.first_name?.[0]}{s.last_name?.[0]}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-slate-800 truncate">{s.first_name} {s.last_name}</p>
+                          <p className="text-xs text-slate-400 truncate">{s.project_title || 'No project'}</p>
+                        </div>
+                        <span className="text-xs text-slate-400 font-mono flex-shrink-0">{formatElapsed(s.clock_in)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-6 flex-1 min-h-0">
 
@@ -373,7 +583,7 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
                   {!selectedProject ? 'Select a Project' : adminView === 'actions' ? `${selectedProject.title} Actions` : `${selectedProject.title} — Team`}
                 </h2>
               </div>
-              {isAdmin && selectedProject && (
+              {isElevated && selectedProject && (
                 <div className="flex bg-slate-100 rounded-lg p-1 gap-1">
                   <button
                     onClick={() => setAdminView('actions')}
@@ -395,7 +605,7 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
               <div className="flex-1 flex items-center justify-center text-slate-400">
                 <p>← Select a project to view actions</p>
               </div>
-            ) : adminView === 'users' && isAdmin ? (
+            ) : adminView === 'users' && isElevated ? (
               /* Admin: Team view */
               <div className="flex-1 overflow-y-auto space-y-3">
                 {loadingStats ? (
@@ -454,10 +664,69 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
               </div>
             ) : (
               /* Actions view */
+              <>
+                {/* Add / Log Past buttons */}
+                <div className="flex gap-2 mb-3 flex-shrink-0">
+                  {isClockedInToSelectedProject && (
+                    <button
+                      onClick={() => setShowAddActionForm(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-[#1c3260] hover:bg-[#16264c] text-white rounded-lg text-xs font-semibold transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Action
+                    </button>
+                  )}
+                  {!isClockedIn && (
+                    <button
+                      onClick={openLogPastModal}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 rounded-lg text-xs font-semibold transition-colors"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      Log Past Action
+                    </button>
+                  )}
+                </div>
+
+                {/* Inline add form */}
+                {showAddActionForm && (
+                  <div className="mb-3 p-3 bg-slate-50 border border-slate-200 rounded-xl flex flex-col gap-2 flex-shrink-0">
+                    <textarea
+                      value={newActionText}
+                      onChange={e => setNewActionText(e.target.value)}
+                      placeholder="What are you working on?" rows={2} autoFocus
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-[#1c3260] placeholder:text-slate-300"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddAction(); }
+                        if (e.key === 'Escape') { setShowAddActionForm(false); setNewActionText(''); }
+                      }}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setShowAddActionForm(false); setNewActionText(''); }}
+                        className="flex-1 px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-lg text-xs font-semibold"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleAddAction}
+                        disabled={addActionLoading || !newActionText.trim()}
+                        className="flex-1 px-3 py-1.5 bg-[#1c3260] hover:bg-[#16264c] disabled:bg-slate-400 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        {addActionLoading ? 'Adding...' : 'Add'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
               <div className="flex-1 overflow-y-auto space-y-4">
-                {actionGroups.length === 0 && (
+                {actionGroups.length === 0 && !showAddActionForm && (
                   <div className="flex items-center justify-center h-full text-slate-400">
-                    <p>No actions yet for this project.</p>
+                    <p className="text-center text-sm">
+                      {isClockedInToSelectedProject
+                        ? 'No actions yet. Click "Add Action" to log what you\'re working on.'
+                        : 'No actions for this project yet.'}
+                    </p>
                   </div>
                 )}
                 {inProgressGroups.length > 0 && (
@@ -547,10 +816,106 @@ export default function ProjectsClient({ user }: ProjectsClientProps) {
                   </div>
                 )}
               </div>
+              </>
             )}
           </div>
         </div>
       </div>
+
+      {/* Log Past Action modal */}
+      {showLogPastModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-150"
+          onClick={() => setShowLogPastModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md mx-4 animate-in zoom-in-95 duration-150" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-10 h-10 rounded-full bg-[#1c3260]/10">
+                  <History className="w-5 h-5 text-[#1c3260]" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">Log Past Action</h3>
+              </div>
+              <button onClick={() => setShowLogPastModal(false)} className="p-1 text-slate-300 hover:text-slate-500 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-500 mb-5">
+              Forgot to log what you worked on? Select the session and describe the action.
+            </p>
+
+            {logPastError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{logPastError}</div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Session</label>
+                {pastSessionsLoading ? (
+                  <div className="h-10 bg-slate-100 rounded-lg animate-pulse" />
+                ) : pastSessions.length === 0 ? (
+                  <p className="text-sm text-slate-400 italic">No completed sessions found.</p>
+                ) : (
+                  <select
+                    value={selectedSessionId}
+                    onChange={e => setSelectedSessionId(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1c3260] bg-white"
+                  >
+                    {pastSessions.map(s => (
+                      <option key={s.id} value={s.id}>{s.display_label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">What did you work on?</label>
+                <textarea
+                  value={pastDesc} onChange={e => setPastDesc(e.target.value)}
+                  placeholder="Describe the action..." rows={2} autoFocus
+                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-[#1c3260] placeholder:text-slate-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">How long did it take?</label>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#1c3260]">
+                      <input type="number" min="0" max="23" value={pastHours} onChange={e => setPastHours(e.target.value)}
+                        className="flex-1 px-3 py-2.5 text-sm text-right focus:outline-none" />
+                      <span className="px-3 text-sm text-slate-400 bg-slate-50 border-l border-slate-200 py-2.5">h</span>
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#1c3260]">
+                      <input type="number" min="0" max="59" value={pastMinutes} onChange={e => setPastMinutes(e.target.value)}
+                        className="flex-1 px-3 py-2.5 text-sm text-right focus:outline-none" />
+                      <span className="px-3 text-sm text-slate-400 bg-slate-50 border-l border-slate-200 py-2.5">m</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => { setShowLogPastModal(false); setPastDesc(''); setPastHours('0'); setPastMinutes('0'); setLogPastError(''); }}
+                className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLogPastAction}
+                disabled={logPastLoading || pastSessions.length === 0}
+                className="flex-1 px-4 py-3 bg-[#1c3260] hover:bg-[#16264c] text-white rounded-xl font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {logPastLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Check className="w-4 h-4" />}
+                {logPastLoading ? 'Logging...' : 'Log Action'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

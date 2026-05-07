@@ -1,23 +1,13 @@
-// app/api/time_entries/active/[userId]/route.ts
+// app/api/time_entries/active/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
-import { getSessionUser, unauthorized, forbidden } from "@/lib/session";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
-export async function GET(
-  req: Request,
-  { params }: { params: Promise<{ userId: string }> }
-) {
+export async function GET() {
   const sessionUser = await getSessionUser();
   if (!sessionUser) return unauthorized();
 
   try {
-    const { userId } = await params;
-
-    // Users can only fetch their own active entry; admins/managers can fetch anyone's
-    if (userId !== sessionUser.id && sessionUser.userType !== 'admin' && sessionUser.userType !== 'manager') {
-      return forbidden();
-    }
-
     const entry = db.prepare(`
       SELECT
         te.id,
@@ -36,7 +26,7 @@ export async function GET(
       WHERE te.user_id = ? AND te.clock_out IS NULL
       ORDER BY te.clock_in DESC
       LIMIT 1
-    `).get(userId);
+    `).get(sessionUser.id);
 
     return NextResponse.json(entry ?? null);
   } catch (err) {

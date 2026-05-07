@@ -2,8 +2,12 @@
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { randomUUID } from "crypto";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET() {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const stmt = db.prepare("SELECT id, title, category FROM projects WHERE is_active = 1");
     const projects = stmt.all();
@@ -15,9 +19,13 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const body = await req.json();
-    const { title, category, description, client, budgeted_hours, start_date, end_date, created_by } = body;
+    const { title, category, description, client, budgeted_hours, start_date, end_date } = body;
+    const created_by = sessionUser.id;
 
     // Validation
     if (!title || !category) {

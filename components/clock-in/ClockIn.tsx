@@ -182,12 +182,12 @@ const ClockIn: React.FC<ClockInProps> = ({ userId, projectId, clockedInSince, on
   async function initiateClockOut(clockOutTime?: string) {
     setLoading(true);
     try {
-      const activeRes = await fetch(`/api/time_entries/active/${userId}`);
+      const activeRes = await fetch('/api/time_entries/active');
       const active = await activeRes.json();
       if (!active?.id) { toast.error('No active session found'); setLoading(false); return; }
 
       if (projectId) {
-        const actionsRes = await fetch(`/api/actions?userId=${userId}&projectId=${projectId}`);
+        const actionsRes = await fetch(`/api/actions?projectId=${projectId}`);
         const actions = await actionsRes.json();
         const liveActions = (Array.isArray(actions) ? actions : []).filter(
           (a: { carried_over: number; completed_at: string | null }) => !a.completed_at && !a.carried_over
@@ -242,7 +242,7 @@ const ClockIn: React.FC<ClockInProps> = ({ userId, projectId, clockedInSince, on
       const res = await fetch('/api/time_entries/clock-in', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, project_id: projectId }),
+        body: JSON.stringify({ project_id: projectId }),
       });
       if (res.ok) {
         toast.success('Clocked in successfully');

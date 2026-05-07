@@ -80,7 +80,6 @@ export default function ManualTimeEntry({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: userId,
           project_id: projectId,
           date,
           hours,

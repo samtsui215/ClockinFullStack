@@ -1,12 +1,16 @@
 // app/api/projects/[projectId]/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET(
   req: Request,
-  { params }: { params: Promise<{ projectId: string }> }  // ← Changed to Promise
+  { params }: { params: Promise<{ projectId: string }> }
 ) {
-  const { projectId } = await params;  // ← Added await
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
+  const { projectId } = await params;
 
   try {
     const stmt = db.prepare("SELECT id, title, category FROM projects WHERE id = ? AND is_active = 1");

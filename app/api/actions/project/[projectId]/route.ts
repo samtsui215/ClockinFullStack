@@ -1,11 +1,15 @@
 // app/api/actions/project/[projectId]/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const { projectId } = await params;
 

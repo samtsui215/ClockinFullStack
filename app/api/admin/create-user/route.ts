@@ -2,8 +2,13 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/firebase/admin";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized, forbidden } from "@/lib/session";
 
 export async function POST(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+  if (sessionUser.userType !== 'admin') return forbidden();
+
   try {
     const { email, password, firstName, lastName, userType } = await req.json();
 

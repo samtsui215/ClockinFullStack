@@ -2,30 +2,29 @@
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { randomUUID } from "crypto";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function POST(req: Request) {
-  try {
-    const { user_id, new_project_id, description } = await req.json();
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
 
-    if (!user_id || !new_project_id) {
-      return NextResponse.json(
-        { error: "user_id and new_project_id are required" },
-        { status: 400 }
-      );
+  try {
+    const { new_project_id, description } = await req.json();
+    const user_id = sessionUser.id;
+
+    if (!new_project_id) {
+      return NextResponse.json({ error: "new_project_id is required" }, { status: 400 });
     }
 
     const now = new Date().toISOString();
-    const today = new Date().toISOString().split("T")[0];
+    const today = now.split("T")[0];
 
     const switchProject = db.transaction(() => {
-      // 1. Find the active entry
       const active = db.prepare(`
         SELECT id, clock_in FROM time_entries
-        WHERE user_id = ? AND clock_out IS NULL
-        LIMIT 1
+        WHERE user_id = ? AND clock_out IS NULL LIMIT 1
       `).get(user_id) as { id: string; clock_in: string } | undefined;
 
-      // 2. Clock it out, saving the description
       if (active) {
         const diffMs = new Date(now).getTime() - new Date(active.clock_in).getTime();
         const hours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
@@ -36,7 +35,6 @@ export async function POST(req: Request) {
           WHERE id = ?
         `).run(now, hours, description || null, now, active.id);
 
-        // Complete in-progress actions for the old project
         const oldEntry = db.prepare(
           `SELECT project_id FROM time_entries WHERE id = ?`
         ).get(active.id) as { project_id: string } | undefined;
@@ -57,14 +55,12 @@ export async function POST(req: Request) {
         }
       }
 
-      // 3. Resume any carried-over actions on the new project
       db.prepare(`
         UPDATE actions
         SET last_resumed_at = ?, carried_over = 0
         WHERE user_id = ? AND project_id = ? AND carried_over = 1 AND completed_at IS NULL
       `).run(now, user_id, new_project_id);
 
-      // 4. Clock into the new project (or same project for "New Action")
       const newId = randomUUID();
       db.prepare(`
         INSERT INTO time_entries (
@@ -81,9 +77,8 @@ export async function POST(req: Request) {
 
     const newEntry = switchProject();
     return NextResponse.json(newEntry, { status: 201 });
-
   } catch (err) {
-    console.error("Switch/New Action failed:", err);
+    console.error("Switch failed:", err);
     return NextResponse.json({ error: "Failed to switch project" }, { status: 500 });
   }
 }

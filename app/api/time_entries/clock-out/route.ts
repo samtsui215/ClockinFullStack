@@ -1,8 +1,12 @@
 // app/api/time_entries/clock-out/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized, forbidden } from "@/lib/session";
 
 export async function POST(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const body = await req.json();
     const { entry_id, clock_out: customClockOut, description, carry_over } = body;
@@ -19,6 +23,7 @@ export async function POST(req: Request) {
     if (!entry) {
       return NextResponse.json({ error: "Time entry not found" }, { status: 404 });
     }
+    if (entry.user_id !== sessionUser.id) return forbidden();
     if (entry.clock_out) {
       return NextResponse.json({ error: "This entry has already been clocked out" }, { status: 400 });
     }

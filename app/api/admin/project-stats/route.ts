@@ -1,11 +1,16 @@
 // app/api/admin/project-stats/[projectId]/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized, forbidden } from "@/lib/session";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ projectId: string }> }
 ) {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+  if (user.userType !== 'admin' && user.userType !== 'manager') return forbidden();
+
   try {
     const { projectId } = await params;
 

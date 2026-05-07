@@ -1,8 +1,13 @@
 // app/api/admin/users/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized, forbidden } from "@/lib/session";
 
 export async function GET(req: Request) {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+  if (user.userType !== 'admin' && user.userType !== 'manager') return forbidden();
+
   try {
     const { searchParams } = new URL(req.url);
     const filter = searchParams.get('filter') || 'this_week';
@@ -16,9 +21,8 @@ export async function GET(req: Request) {
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() - dayOfWeek);
       weekStart.setHours(0, 0, 0, 0);
-      // Match YYYY-MM-DD format used in time_entries.date
-      const weekStartDate = weekStart.toISOString().split('T')[0];
-      dateFilter = `AND te.date >= '${weekStartDate}'`;
+      dateFilter = 'AND te.date >= ?';
+      params.push(weekStart.toISOString().split('T')[0]);
     }
 
     const users = db.prepare(`
@@ -47,6 +51,10 @@ export async function GET(req: Request) {
 }
 
 export async function PATCH(req: Request) {
+  const user = await getSessionUser();
+  if (!user) return unauthorized();
+  if (user.userType !== 'admin') return forbidden();
+
   try {
     const { userId, userType, isActive } = await req.json();
 

@@ -1,20 +1,19 @@
 // app/api/profile/activity/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("userId");
-    const limit = parseInt(searchParams.get("limit") || "5");
+    const limit = Math.min(parseInt(searchParams.get("limit") || "5"), 50);
+    const userId = sessionUser.id;
 
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    // Get recent completed actions with project info
     const actions = db.prepare(`
-      SELECT 
+      SELECT
         a.id,
         a.description,
         a.started_at,

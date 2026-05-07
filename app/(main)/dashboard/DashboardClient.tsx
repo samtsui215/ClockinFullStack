@@ -31,10 +31,97 @@ interface User {
   email: string;
   firstName?: string;
   lastName?: string;
+  userType?: string;
 }
 
 interface DashboardClientProps {
   user: User;
+}
+
+interface ActiveSession {
+  entry_id: string;
+  clock_in: string;
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  project_id: string;
+  project_title: string;
+  project_category: string;
+}
+
+function formatElapsed(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function TeamLivePanel({ onRefreshTick }: { onRefreshTick?: () => void }) {
+  const [sessions, setSessions] = useState<ActiveSession[]>([]);
+  const [teamHours, setTeamHours] = useState(0);
+  const [activeCount, setActiveCount] = useState(0);
+  const [, setTick] = useState(0);
+
+  const refresh = useCallback(() => {
+    fetch('/api/admin/team-activity')
+      .then(res => res.json())
+      .then(data => {
+        setSessions(data.activeSessions ?? []);
+        setTeamHours(data.teamHoursThisWeek ?? 0);
+        setActiveCount(data.activeCount ?? 0);
+      })
+      .catch(console.error);
+    onRefreshTick?.();
+  }, [onRefreshTick]);
+
+  useEffect(() => {
+    refresh();
+    const poll = setInterval(refresh, 30_000);
+    return () => clearInterval(poll);
+  }, [refresh]);
+
+  // Tick every 30s to update elapsed displays
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div className="bg-white rounded-2xl shadow-md p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+          Team Live
+        </h3>
+        <span className="text-xs text-slate-400">{activeCount} working now</span>
+      </div>
+
+      {sessions.length === 0 ? (
+        <p className="text-xs text-slate-400 text-center py-2">No one clocked in</p>
+      ) : (
+        <div className="space-y-2 overflow-y-auto max-h-44">
+          {sessions.map(s => (
+            <div key={s.entry_id} className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#1c3260] to-[#4062ad] text-white text-xs flex items-center justify-center font-bold flex-shrink-0">
+                {s.first_name?.[0]}{s.last_name?.[0]}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-800 truncate">{s.first_name} {s.last_name}</p>
+                <p className="text-xs text-slate-400 truncate">{s.project_title || 'No project'}</p>
+              </div>
+              <span className="text-xs text-slate-400 font-mono flex-shrink-0">{formatElapsed(s.clock_in)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+        <span className="text-xs text-slate-500">Team hours this week</span>
+        <span className="text-sm font-bold text-[#1c3260]">{teamHours.toFixed(1)}h</span>
+      </div>
+    </div>
+  );
 }
 
 function useElapsed(clockInTime: string | null): string {
@@ -150,23 +237,24 @@ export default function DashboardClient({ user }: DashboardClientProps) {
   const [switching, setSwitching] = useState(false);
 
   const userId = user.id;
+  const isElevated = user.userType === 'admin' || user.userType === 'manager';
 
   const fetchWeeklyHours = useCallback(() => {
-    fetch(`/api/profile/stats?userId=${userId}`)
+    fetch('/api/profile/stats')
       .then(res => res.json())
       .then(data => setWeeklyHours(data?.thisWeek?.hours ?? 0))
       .catch(console.error);
   }, [userId]);
 
   const fetchRecentProjects = useCallback(() => {
-    fetch(`/api/recent-projects?userId=${userId}`)
+    fetch('/api/recent-projects')
       .then(res => res.json())
       .then((data: RecentProject[]) => setRecentProjects(data))
       .catch(console.error);
   }, [userId]);
 
   const fetchActiveEntry = useCallback(() => {
-    fetch(`/api/time_entries/active/${userId}`)
+    fetch('/api/time_entries/active')
       .then(res => res.json())
       .then(data => {
         setClockedInProjectId(data?.project_id ?? null);
@@ -230,7 +318,7 @@ export default function DashboardClient({ user }: DashboardClientProps) {
       const res = await fetch('/api/time_entries/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, new_project_id: pendingSwitchToId, description: null }),
+        body: JSON.stringify({ new_project_id: pendingSwitchToId, description: null }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -272,6 +360,7 @@ export default function DashboardClient({ user }: DashboardClientProps) {
         <div className="flex flex-col gap-4 flex-[1] h-full min-h-0">
           <DateTime />
           <HoursWorkedCard hoursWorked={weeklyHours} />
+          {isElevated && <TeamLivePanel />}
           <div className="flex-1 min-h-0">
             <RecentProjects
               projects={recentProjects}

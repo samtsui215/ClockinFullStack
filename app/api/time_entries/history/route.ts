@@ -1,16 +1,16 @@
 // app/api/time_entries/history/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("userId");
     const limit = Math.min(parseInt(searchParams.get("limit") || "10"), 50);
-
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
+    const userId = sessionUser.id;
 
     const entries = db.prepare(`
       SELECT
@@ -34,10 +34,10 @@ export async function GET(req: Request) {
       project_id: string; project_title: string; project_category: string;
     }>;
 
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const monNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const result = entries.map(e => {
       const d = new Date(e.clock_in);
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const monNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const label = `${dayNames[d.getDay()]} ${monNames[d.getMonth()]} ${d.getDate()} · ${e.project_title || 'Unknown Project'} · ${Number(e.hours).toFixed(1)}h`;
       return { ...e, display_label: label };
     });

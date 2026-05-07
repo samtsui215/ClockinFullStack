@@ -128,7 +128,7 @@ export default function ActionPanel({ projectId, userId, activeEntryId, isClocke
   const fetchActions = useCallback(async () => {
     if (!projectId || !userId) return;
     try {
-      const res = await fetch(`/api/actions?userId=${userId}&projectId=${projectId}`);
+      const res = await fetch(`/api/actions?projectId=${projectId}`);
       if (res.ok) {
         const data = await res.json();
         setActions(data);
@@ -148,7 +148,7 @@ export default function ActionPanel({ projectId, userId, activeEntryId, isClocke
     setShowLogPastModal(true);
     setPastSessionsLoading(true);
     try {
-      const res = await fetch(`/api/time_entries/history?userId=${userId}&limit=10`);
+      const res = await fetch('/api/time_entries/history?limit=10');
       if (res.ok) {
         const data = await res.json();
         setPastSessions(data);
@@ -182,7 +182,6 @@ export default function ActionPanel({ projectId, userId, activeEntryId, isClocke
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: userId,
           project_id: session.project_id,
           description: pastDesc.trim(),
           time_entry_id: selectedSessionId,
@@ -213,7 +212,7 @@ export default function ActionPanel({ projectId, userId, activeEntryId, isClocke
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: userId, project_id: projectId, description: newActionText,
+          project_id: projectId, description: newActionText,
           time_entry_id: activeEntryId, group_id: activeGroupId,
         }),
       });

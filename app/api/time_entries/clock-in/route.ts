@@ -2,20 +2,19 @@
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { randomUUID } from "crypto";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function POST(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const body = await req.json();
-    const { user_id, project_id } = body;
+    const { project_id } = body;
+    const user_id = sessionUser.id;
 
-    if (!user_id) {
-      return NextResponse.json({ error: "User ID is required" }, { status: 400 });
-    }
-
-    // Check if user already has an active clock-in
     const existing = db.prepare(`
-      SELECT id FROM time_entries 
-      WHERE user_id = ? AND clock_out IS NULL
+      SELECT id FROM time_entries WHERE user_id = ? AND clock_out IS NULL
     `).get(user_id);
 
     if (existing) {
@@ -27,32 +26,16 @@ export async function POST(req: Request) {
 
     const id = randomUUID();
     const now = new Date().toISOString();
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    const today = now.split('T')[0];
 
-    // Create new time entry with clock_in
-    const stmt = db.prepare(`
+    db.prepare(`
       INSERT INTO time_entries (
-        id, user_id, project_id, date, hours, 
+        id, user_id, project_id, date, hours,
         clock_in, clock_out, status, billable,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    `).run(id, user_id, project_id || null, today, 0, now, null, 'draft', 1, now, now);
 
-    stmt.run(
-      id,
-      user_id,
-      project_id || null,
-      today,
-      0, // hours will be calculated on clock out
-      now, // clock_in
-      null, // clock_out
-      'draft',
-      1, // billable
-      now,
-      now
-    );
-
-    // Resume any carried-over actions for this user+project
     if (project_id) {
       db.prepare(`
         UPDATE actions
@@ -61,17 +44,12 @@ export async function POST(req: Request) {
       `).run(now, user_id, project_id);
     }
 
-    // Return the created entry
     const newEntry = db.prepare(`
-      SELECT 
-        id, user_id, project_id, date, hours,
-        clock_in, clock_out, status, billable
-      FROM time_entries 
-      WHERE id = ?
+      SELECT id, user_id, project_id, date, hours, clock_in, clock_out, status, billable
+      FROM time_entries WHERE id = ?
     `).get(id);
 
     return NextResponse.json(newEntry, { status: 201 });
-
   } catch (err) {
     console.error("Clock-in failed:", err);
     return NextResponse.json({ error: "Failed to clock in" }, { status: 500 });

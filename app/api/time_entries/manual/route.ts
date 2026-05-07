@@ -2,11 +2,14 @@
 import { NextResponse } from 'next/server';
 import db from '@/lib/database';
 import { randomUUID } from 'crypto';
+import { getSessionUser, unauthorized } from '@/lib/session';
 
 export async function POST(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
     const {
-      user_id,
       project_id,
       date,
       hours,
@@ -15,25 +18,21 @@ export async function POST(req: Request) {
       description,
       status = 'submitted',
     } = await req.json();
+    const user_id = sessionUser.id;
 
-    if (!user_id || !project_id || !date || hours == null || !clock_in || !clock_out) {
+    if (!project_id || !date || hours == null || !clock_in || !clock_out) {
       return NextResponse.json(
-        { error: 'user_id, project_id, date, hours, clock_in, and clock_out are required' },
+        { error: 'project_id, date, hours, clock_in, and clock_out are required' },
         { status: 400 }
       );
     }
 
     if (hours <= 0) {
-      return NextResponse.json(
-        { error: 'End time must be after start time' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'End time must be after start time' }, { status: 400 });
     }
 
-    // Ensure no active (open) entry exists for this user
     const activeEntry = db.prepare(`
-      SELECT id FROM time_entries
-      WHERE user_id = ? AND clock_out IS NULL
+      SELECT id FROM time_entries WHERE user_id = ? AND clock_out IS NULL
     `).get(user_id);
 
     if (activeEntry) {

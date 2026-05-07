@@ -1,19 +1,17 @@
 // app/api/profile/stats/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
 export async function GET(req: Request) {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("userId");
+    const userId = sessionUser.id;
 
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    // Week boundaries (Monday to now)
     const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...
+    const dayOfWeek = now.getDay();
     const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
     const weekStart = new Date(now);
     weekStart.setDate(now.getDate() - daysFromMonday);
@@ -27,7 +25,6 @@ export async function GET(req: Request) {
     const prevWeekStartISO = prevWeekStart.toISOString();
     const prevWeekEndISO = prevWeekEnd.toISOString();
 
-    // Hours this week from time_entries
     const hoursRow = db.prepare(`
       SELECT COALESCE(SUM(hours), 0) as total
       FROM time_entries
@@ -40,34 +37,26 @@ export async function GET(req: Request) {
       WHERE user_id = ? AND clock_in >= ? AND clock_in < ? AND status = 'completed'
     `).get(userId, prevWeekStartISO, prevWeekEndISO) as { total: number };
 
-    // Actions created this week
     const actionsCreatedRow = db.prepare(`
-      SELECT COUNT(*) as total
-      FROM actions
+      SELECT COUNT(*) as total FROM actions
       WHERE user_id = ? AND created_at >= ?
     `).get(userId, weekStartISO) as { total: number };
 
     const prevActionsCreatedRow = db.prepare(`
-      SELECT COUNT(*) as total
-      FROM actions
+      SELECT COUNT(*) as total FROM actions
       WHERE user_id = ? AND created_at >= ? AND created_at < ?
     `).get(userId, prevWeekStartISO, prevWeekEndISO) as { total: number };
 
-    // Actions completed this week
     const actionsCompletedRow = db.prepare(`
-      SELECT COUNT(*) as total
-      FROM actions
+      SELECT COUNT(*) as total FROM actions
       WHERE user_id = ? AND completed_at >= ?
     `).get(userId, weekStartISO) as { total: number };
 
-    // Active projects this week (projects with time entries)
     const activeProjectsRow = db.prepare(`
-      SELECT COUNT(DISTINCT project_id) as total
-      FROM time_entries
+      SELECT COUNT(DISTINCT project_id) as total FROM time_entries
       WHERE user_id = ? AND clock_in >= ?
     `).get(userId, weekStartISO) as { total: number };
 
-    // Daily hours for the current week (Mon–Sun)
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const dailyHours = days.map((day, i) => {
       const dayStart = new Date(weekStart);
@@ -84,7 +73,6 @@ export async function GET(req: Request) {
       return { day, hours: Math.round(row.total * 10) / 10 };
     });
 
-    // Compute trends
     const hoursDiff = hoursRow.total - prevHoursRow.total;
     const actionsDiff = actionsCreatedRow.total - prevActionsCreatedRow.total;
 
@@ -109,10 +97,7 @@ export async function GET(req: Request) {
         completedNotes: actionsCompletedRow.total,
         activeProjects: activeProjectsRow.total,
       },
-      trends: {
-        hours: hoursTrend,
-        notes: actionsTrend,
-      },
+      trends: { hours: hoursTrend, notes: actionsTrend },
       dailyHours,
     });
   } catch (err) {

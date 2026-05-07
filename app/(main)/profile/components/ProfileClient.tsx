@@ -1,10 +1,10 @@
 'use client';
-import React, { useEffect, useState } from 'react';
-import { 
-  Clock, 
-  FileText, 
-  CheckCircle2, 
-  FolderOpen 
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  Clock,
+  FileText,
+  CheckCircle2,
+  FolderOpen
 } from 'lucide-react';
 import { StatsCard } from './StatsCard';
 import { ProfileInfoCard } from './ProfileInfoCard';
@@ -57,34 +57,88 @@ interface ProfileClientProps {
   user: User;
 }
 
+function getWeekLabel(offset: number, weekStart: Date): string {
+  if (offset === 0) return 'This Week';
+  if (offset === -1) return 'Last Week';
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `${fmt(weekStart)} – ${fmt(weekEnd)}`;
+}
+
 export function ProfileClient({ user }: ProfileClientProps) {
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [chartWeekOffset, setChartWeekOffset] = useState(0);
+  const [chartData, setChartData] = useState<{ day: string; hours: number }[]>([]);
+  const [chartTotal, setChartTotal] = useState(0);
+  const [chartWeekLabel, setChartWeekLabel] = useState('This Week');
+  const [chartLoading, setChartLoading] = useState(false);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const statsRes = await fetch(`/api/profile/stats?userId=${user.id}`);
+        const [statsRes, activityRes] = await Promise.all([
+          fetch('/api/profile/stats'),
+          fetch('/api/profile/activity?limit=5'),
+        ]);
         if (statsRes.ok) {
           const statsData = await statsRes.json();
           setStats(statsData);
+          // seed chart with current week from main stats to avoid a double fetch
+          setChartData(statsData.dailyHours);
+          setChartTotal(statsData.thisWeek.hours);
         }
-
-        const activityRes = await fetch(`/api/profile/activity?userId=${user.id}&limit=5`);
-        if (activityRes.ok) {
-          const activityData = await activityRes.json();
-          setActivities(activityData);
-        }
+        if (activityRes.ok) setActivities(await activityRes.json());
       } catch (err) {
         console.error('Failed to fetch profile data:', err);
       } finally {
         setLoading(false);
       }
     };
-
     fetchData();
-  }, [user.id]);
+  }, []);
+
+  const fetchChartWeek = useCallback(async (offset: number) => {
+    setChartLoading(true);
+    try {
+      const res = await fetch(`/api/profile/weekly-hours?weekOffset=${offset}`);
+      if (res.ok) {
+        const data = await res.json();
+        setChartData(data.dailyHours);
+        setChartTotal(data.totalHours);
+        setChartWeekLabel(getWeekLabel(offset, new Date(data.weekStart)));
+      }
+    } catch (err) {
+      console.error('Failed to fetch chart data:', err);
+    } finally {
+      setChartLoading(false);
+    }
+  }, []);
+
+  const handleChartPrev = useCallback(() => {
+    const next = chartWeekOffset - 1;
+    setChartWeekOffset(next);
+    fetchChartWeek(next);
+  }, [chartWeekOffset, fetchChartWeek]);
+
+  const handleChartNext = useCallback(() => {
+    if (chartWeekOffset >= 0) return;
+    const next = chartWeekOffset + 1;
+    setChartWeekOffset(next);
+    fetchChartWeek(next);
+  }, [chartWeekOffset, fetchChartWeek]);
+
+  const handleChartToday = useCallback(() => {
+    setChartWeekOffset(0);
+    setChartWeekLabel('This Week');
+    if (stats) {
+      setChartData(stats.dailyHours);
+      setChartTotal(stats.thisWeek.hours);
+    }
+  }, [stats]);
 
   const userForDisplay = {
     id: user.id,
@@ -161,7 +215,15 @@ export function ProfileClient({ user }: ProfileClientProps) {
 
                 {/* Weekly Chart */}
                 {stats && (
-                  <WeeklyProductivityChart data={stats.dailyHours} />
+                  <WeeklyProductivityChart
+                    data={chartData}
+                    totalHours={chartTotal}
+                    weekLabel={chartWeekLabel}
+                    loading={chartLoading}
+                    onPrev={handleChartPrev}
+                    onNext={chartWeekOffset < 0 ? handleChartNext : undefined}
+                    onToday={chartWeekOffset < 0 ? handleChartToday : undefined}
+                  />
                 )}
               </>
             )}

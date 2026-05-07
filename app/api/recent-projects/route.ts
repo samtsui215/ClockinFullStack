@@ -1,19 +1,15 @@
 // app/api/recent-projects/route.ts
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
+import { getSessionUser, unauthorized } from "@/lib/session";
 
-export async function GET(req: Request) {
+export async function GET() {
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) return unauthorized();
+
   try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("userId");
-
-    if (!userId) {
-      return NextResponse.json({ error: "userId is required" }, { status: 400 });
-    }
-
-    // Get last 5 distinct projects the user has clocked into, most recent first
     const rows = db.prepare(`
-      SELECT 
+      SELECT
         p.id,
         p.title,
         p.category,
@@ -26,7 +22,7 @@ export async function GET(req: Request) {
       GROUP BY p.id, p.title, p.category
       ORDER BY last_used DESC
       LIMIT 5
-    `).all(userId) as {
+    `).all(sessionUser.id) as {
       id: string;
       title: string;
       category: string;
