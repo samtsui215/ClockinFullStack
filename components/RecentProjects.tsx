@@ -39,7 +39,7 @@ export default function RecentProjects({
   const isClockedIn = clockedInProjectId !== null;
 
   return (
-    <div className="bg-white rounded-2xl shadow-md p-5 flex flex-col gap-3 h-full">
+    <div className="bg-white rounded-2xl shadow-md p-5 flex flex-col gap-3">
       <div className="flex items-center gap-2 mb-1">
         <Clock className="w-4 h-4 text-[#1c3260]" />
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
@@ -57,8 +57,8 @@ export default function RecentProjects({
           No recent projects yet.
         </p>
       ) : (
-        <div className="flex flex-col flex-1 justify-around gap-2">
-          {projects.map((project, index) => {
+        <div className="flex flex-col gap-2">
+          {projects.slice(0, 5).map((project, index) => {
             const isActive = project.id === activeProjectId;
             const isClockedIntoThis = project.id === clockedInProjectId;
             const willSwitch = isClockedIn && !isClockedIntoThis;
@@ -67,7 +67,7 @@ export default function RecentProjects({
               <button
                 key={project.id}
                 onClick={() => onProjectSelect(project.id)}
-                className={`w-full flex-1 text-left px-4 py-3 rounded-xl border transition-all flex items-center justify-between group
+                className={`w-full text-left px-4 py-3 rounded-xl border transition-all flex items-center justify-between group
                   ${isClockedIntoThis
                     ? "bg-emerald-600 border-emerald-600 text-white shadow-md"
                     : isActive

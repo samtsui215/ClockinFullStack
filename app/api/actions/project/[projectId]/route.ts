@@ -19,7 +19,7 @@ export async function GET(
 
     // Fetch all actions for this project, grouped by group_id
     // In-progress (completed_at IS NULL) first, then completed ordered by most recent
-    const actions = db.prepare(`
+    const actions = await db.prepare(`
       SELECT 
         a.*,
         u.first_name,

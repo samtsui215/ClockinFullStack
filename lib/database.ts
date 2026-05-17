@@ -1,10 +1,54 @@
 // lib/database.ts
-import Database from 'better-sqlite3';
+import { createClient, type Client, type InValue } from '@libsql/client';
 
-const db = new Database('database.db');
+// Local dev defaults to the SQLite file; production reads Turso credentials.
+const url = process.env.TURSO_DATABASE_URL ?? 'file:database.db';
+const authToken = process.env.TURSO_AUTH_TOKEN;
 
-export function initDatabase() {
-  db.exec(`
+export const client: Client = createClient({ url, authToken });
+
+type Row = Record<string, unknown>;
+
+export interface Statement {
+  get<T = Row>(...args: InValue[]): Promise<T | undefined>;
+  all<T = Row>(...args: InValue[]): Promise<T[]>;
+  run(...args: InValue[]): Promise<{ changes: number; lastInsertRowid: bigint | undefined }>;
+}
+
+/**
+ * Compatibility shim mimicking better-sqlite3's `db.prepare(sql).get/all/run(...)`
+ * API on top of libSQL. `prepare()` is synchronous; the terminal calls are async,
+ * so every call site needs `await` on `.get()` / `.all()` / `.run()`.
+ */
+function prepare(sql: string): Statement {
+  return {
+    async get<T = Row>(...args: InValue[]): Promise<T | undefined> {
+      const res = await client.execute({ sql, args });
+      const row = res.rows[0];
+      // libSQL Row objects are not plain objects — spread into one so the
+      // result is safe to pass from Server to Client Components.
+      return row ? ({ ...row } as unknown as T) : undefined;
+    },
+    async all<T = Row>(...args: InValue[]): Promise<T[]> {
+      const res = await client.execute({ sql, args });
+      return res.rows.map((row) => ({ ...row })) as unknown as T[];
+    },
+    async run(...args: InValue[]) {
+      const res = await client.execute({ sql, args });
+      return { changes: res.rowsAffected, lastInsertRowid: res.lastInsertRowid };
+    },
+  };
+}
+
+const db = { prepare };
+
+/**
+ * Creates the schema on a fresh database. Not run automatically — production
+ * uses a Turso DB imported from the existing database.db, which already has
+ * the schema. Kept for bootstrapping a brand-new (empty) database.
+ */
+export async function initDatabase() {
+  await client.executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
@@ -27,6 +71,7 @@ export function initDatabase() {
       start_date DATETIME,
       end_date DATETIME,
       is_active BOOLEAN DEFAULT 1,
+      is_archived INTEGER DEFAULT 0,
       created_by TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -70,6 +115,9 @@ export function initDatabase() {
       description TEXT NOT NULL,
       started_at DATETIME NOT NULL,
       completed_at DATETIME,
+      accumulated_seconds INTEGER DEFAULT 0,
+      carried_over INTEGER DEFAULT 0,
+      last_resumed_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -79,6 +127,7 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS categories (
       id TEXT PRIMARY KEY,
       name TEXT UNIQUE NOT NULL,
+      parent_id TEXT REFERENCES categories(id),
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -96,40 +145,32 @@ export function initDatabase() {
       FOREIGN KEY (project_id) REFERENCES projects(id),
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
-  `);
 
-  // Migrations for existing databases — silently skip if column already exists
-  const migrations = [
-    'ALTER TABLE time_entries ADD COLUMN clock_in DATETIME',
-    'ALTER TABLE time_entries ADD COLUMN clock_out DATETIME',
-    'ALTER TABLE actions ADD COLUMN accumulated_seconds INTEGER DEFAULT 0',
-    'ALTER TABLE actions ADD COLUMN carried_over INTEGER DEFAULT 0',
-    'ALTER TABLE actions ADD COLUMN last_resumed_at DATETIME',
-  ];
-  for (const sql of migrations) {
-    try { db.exec(sql); } catch { /* already exists */ }
-  }
+    -- Indexes for the hot query paths (lookups by user/project/date).
+    CREATE INDEX IF NOT EXISTS idx_time_entries_user ON time_entries(user_id);
+    CREATE INDEX IF NOT EXISTS idx_time_entries_user_open ON time_entries(user_id, clock_out);
+    CREATE INDEX IF NOT EXISTS idx_time_entries_project ON time_entries(project_id);
+    CREATE INDEX IF NOT EXISTS idx_time_entries_date ON time_entries(date);
+    CREATE INDEX IF NOT EXISTS idx_actions_user_project ON actions(user_id, project_id);
+    CREATE INDEX IF NOT EXISTS idx_actions_project ON actions(project_id);
+    CREATE INDEX IF NOT EXISTS idx_actions_group ON actions(group_id);
+    CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id);
+  `);
 }
 
-export function createNote(
+export async function createNote(
   id: string,
   projectId: string,
   userId: string,
   message: string,
   priority: string
 ) {
-  if (projectId) {
-    const stmt = db.prepare(`
-      INSERT INTO notes (id, project_id, user_id, message, priority)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    stmt.run(id, projectId, userId, message, priority);
-  } else {
-    throw new Error("Project ID is required");
-  }
+  if (!projectId) throw new Error("Project ID is required");
+  await client.execute({
+    sql: `INSERT INTO notes (id, project_id, user_id, message, priority)
+          VALUES (?, ?, ?, ?, ?)`,
+    args: [id, projectId, userId, message, priority],
+  });
 }
-
-// Initialize the database when this file is imported
-initDatabase();
 
 export default db;

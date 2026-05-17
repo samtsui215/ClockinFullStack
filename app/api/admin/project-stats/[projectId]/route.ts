@@ -19,38 +19,33 @@ export async function GET(
     }
 
     // Per-user hours + action counts for this project
-    const userStats = db.prepare(`
+    const userStats = await db.prepare(`
       SELECT
         u.id,
         u.first_name as firstName,
         u.last_name as lastName,
         u.email,
-        ROUND(COALESCE(SUM(
-          CASE
-            WHEN te.clock_out IS NOT NULL
-            THEN (julianday(te.clock_out) - julianday(te.clock_in)) * 24
-            ELSE 0
-          END
-        ), 0), 2) as totalHours,
+        ROUND(COALESCE(SUM(te.hours), 0), 2) as totalHours,
         COUNT(te.id) as sessionCount,
         MIN(te.clock_in) as firstClockIn,
         MAX(te.clock_in) as lastClockIn,
         (
           SELECT COUNT(*) FROM actions a
-          WHERE a.user_id = u.id AND a.project_id = te.project_id AND a.completed_at IS NOT NULL
+          WHERE a.user_id = u.id AND a.project_id = ? AND a.completed_at IS NOT NULL
         ) as completedActions,
         (
           SELECT COUNT(*) FROM actions a
-          WHERE a.user_id = u.id AND a.project_id = te.project_id AND a.completed_at IS NULL
+          WHERE a.user_id = u.id AND a.project_id = ? AND a.completed_at IS NULL
         ) as inProgressActions
       FROM users u
       INNER JOIN time_entries te ON u.id = te.user_id AND te.project_id = ?
+      WHERE te.clock_out IS NOT NULL
       GROUP BY u.id
       ORDER BY totalHours DESC
-    `).all(projectId);
+    `).all(projectId, projectId, projectId);
 
     // Users currently clocked in on this project
-    const activeUsers = db.prepare(`
+    const activeUsers = await db.prepare(`
       SELECT
         u.id,
         u.first_name as firstName,

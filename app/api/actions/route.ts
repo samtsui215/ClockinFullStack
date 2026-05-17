@@ -16,7 +16,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "projectId is required" }, { status: 400 });
     }
 
-    const actions = db.prepare(`
+    const actions = await db.prepare(`
       SELECT id, group_id, time_entry_id, user_id, project_id, description,
              started_at, completed_at, created_at,
              accumulated_seconds, carried_over, last_resumed_at
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
         );
       }
 
-      const entry = db.prepare(
+      const entry = await db.prepare(
         `SELECT clock_in FROM time_entries WHERE id = ? AND user_id = ?`
       ).get(time_entry_id, user_id) as { clock_in: string } | undefined;
 
@@ -72,7 +72,7 @@ export async function POST(req: Request) {
       ).toISOString();
       const accumulatedSeconds = duration_minutes * 60;
 
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO actions (
           id, group_id, time_entry_id, user_id, project_id, description,
           started_at, completed_at, accumulated_seconds, carried_over, last_resumed_at, created_at
@@ -80,14 +80,14 @@ export async function POST(req: Request) {
       `).run(id, newGroupId, time_entry_id, user_id, project_id, description.trim(),
              startedAt, completedAt, accumulatedSeconds, new Date().toISOString());
 
-      return NextResponse.json(db.prepare(`SELECT * FROM actions WHERE id = ?`).get(id), { status: 201 });
+      return NextResponse.json(await db.prepare(`SELECT * FROM actions WHERE id = ?`).get(id), { status: 201 });
     }
 
     const id = randomUUID();
     const resolvedGroupId = group_id || randomUUID();
     const now = new Date().toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO actions (
         id, group_id, time_entry_id, user_id, project_id, description,
         started_at, last_resumed_at, accumulated_seconds, carried_over, created_at
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
     `).run(id, resolvedGroupId, time_entry_id || null, user_id, project_id,
            description.trim(), now, now, now);
 
-    const action = db.prepare(`SELECT * FROM actions WHERE id = ?`).get(id) as Record<string, unknown>;
+    const action = await db.prepare(`SELECT * FROM actions WHERE id = ?`).get(id) as Record<string, unknown>;
     return NextResponse.json({ ...action, group_id: resolvedGroupId }, { status: 201 });
   } catch (err) {
     console.error("Failed to create action:", err);

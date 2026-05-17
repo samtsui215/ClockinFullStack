@@ -9,13 +9,12 @@ export async function GET() {
   if (!sessionUser) return unauthorized();
 
   try {
-    const stmt = db.prepare(`
-      SELECT id, name, created_at 
-      FROM categories 
+    const categories = await db.prepare(`
+      SELECT id, name, parent_id, created_at
+      FROM categories
       ORDER BY name
-    `);
-    const categories = stmt.all();
-    
+    `).all();
+
     return NextResponse.json(categories);
   } catch (err) {
     console.error("Failed to fetch categories:", err);
@@ -29,7 +28,7 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { name } = body;
+    const { name, parent_id } = body;
 
     if (!name || !name.trim()) {
       return NextResponse.json(
@@ -38,31 +37,23 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check if category already exists
-    const existing = db.prepare(`
-      SELECT id FROM categories WHERE name = ?
-    `).get(name.trim());
-
+    const existing = await db.prepare(`SELECT id FROM categories WHERE name = ?`).get(name.trim());
     if (existing) {
-      return NextResponse.json(
-        { error: "Category already exists" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "Category already exists" }, { status: 409 });
     }
 
     const id = randomUUID();
     const now = new Date().toISOString();
 
-    const stmt = db.prepare(`
-      INSERT INTO categories (id, name, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
-    `);
+    await db.prepare(`
+      INSERT INTO categories (id, name, parent_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, name.trim(), parent_id ?? null, now, now);
 
-    stmt.run(id, name.trim(), now, now);
+    const newCategory = await db.prepare(
+      "SELECT id, name, parent_id, created_at FROM categories WHERE id = ?"
+    ).get(id);
 
-    // Return the newly created category
-    const newCategory = db.prepare("SELECT id, name, created_at FROM categories WHERE id = ?").get(id);
-    
     return NextResponse.json(newCategory, { status: 201 });
   } catch (err) {
     console.error("Failed to create category:", err);

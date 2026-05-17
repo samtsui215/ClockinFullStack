@@ -18,7 +18,7 @@ export async function GET(
       return forbidden();
     }
 
-    const entry = db.prepare(`
+    const entry = await db.prepare(`
       SELECT
         te.id,
         te.user_id,

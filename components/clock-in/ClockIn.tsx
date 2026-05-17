@@ -5,11 +5,17 @@ import { toast } from 'sonner';
 import Timer from './Timer';
 import { LogOut, Play, Clock, AlertCircle, X, BookmarkMinus } from 'lucide-react';
 
+interface ClockInEntry {
+  id: string;
+  clock_in: string;
+  project_id: string;
+}
+
 interface ClockInProps {
   userId: string;
   projectId: string | null;
   clockedInSince: string | null;
-  onClockInOut?: () => void;
+  onClockInOut?: (entry?: ClockInEntry | null) => void;
 }
 
 interface ActionSummary {
@@ -223,7 +229,7 @@ const ClockIn: React.FC<ClockInProps> = ({ userId, projectId, clockedInSince, on
         setShowForgotModal(false);
         setPendingEntry(null);
         setCarryOverActions([]);
-        onClockInOut?.();
+        onClockInOut?.(null);
       } else {
         const data = await res.json();
         toast.error(data.error || 'Failed to clock out');
@@ -245,8 +251,9 @@ const ClockIn: React.FC<ClockInProps> = ({ userId, projectId, clockedInSince, on
         body: JSON.stringify({ project_id: projectId }),
       });
       if (res.ok) {
+        const data = await res.json();
         toast.success('Clocked in successfully');
-        onClockInOut?.();
+        onClockInOut?.({ id: data.id, clock_in: data.clock_in, project_id: data.project_id });
       } else {
         const data = await res.json();
         toast.error(data.error || 'Failed to clock in');

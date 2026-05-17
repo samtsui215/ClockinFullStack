@@ -20,7 +20,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
     const decoded = await auth.verifySessionCookie(sessionCookie, true);
 
-    const user = db.prepare(`
+    const user = await db.prepare(`
       SELECT id, email,
              first_name AS firstName, last_name AS lastName,
              user_type AS userType, is_active AS isActive

@@ -17,7 +17,7 @@ export async function GET(
       return forbidden();
     }
 
-    const action = db.prepare(`
+    const action = await db.prepare(`
       SELECT
         a.*,
         p.title as project_title,

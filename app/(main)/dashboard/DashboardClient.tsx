@@ -296,9 +296,22 @@ export default function DashboardClient({ user }: DashboardClientProps) {
       .catch(console.error);
   }, [selectedProjectId]);
 
-  const handleClockInOut = useCallback(() => {
+  const handleClockInOut = useCallback((entry?: { id: string; clock_in: string; project_id: string } | null) => {
+    if (entry === null) {
+      // Clock-out: clear state immediately
+      setClockedInProjectId(null);
+      setClockedInSince(null);
+      setActiveEntryId(null);
+    } else if (entry) {
+      // Clock-in: apply state immediately from response data
+      setClockedInProjectId(entry.project_id);
+      setClockedInSince(entry.clock_in);
+      setActiveEntryId(entry.id);
+    } else {
+      // Fallback (e.g. manual time entry): fetch active entry
+      fetchActiveEntry();
+    }
     fetchRecentProjects();
-    fetchActiveEntry();
     fetchWeeklyHours();
   }, [fetchRecentProjects, fetchActiveEntry, fetchWeeklyHours]);
 
@@ -359,9 +372,8 @@ export default function DashboardClient({ user }: DashboardClientProps) {
         {/* Left column */}
         <div className="flex flex-col gap-4 flex-[1] h-full min-h-0">
           <DateTime />
-          <HoursWorkedCard hoursWorked={weeklyHours} />
-          {isElevated && <TeamLivePanel />}
-          <div className="flex-1 min-h-0">
+          {isElevated ? <TeamLivePanel /> : <HoursWorkedCard hoursWorked={weeklyHours} />}
+          <div>
             <RecentProjects
               projects={recentProjects}
               activeProjectId={selectedProjectId}

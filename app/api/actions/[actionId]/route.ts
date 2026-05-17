@@ -16,7 +16,7 @@ export async function PATCH(
     const body = await req.json().catch(() => ({}));
     const completeGroup = body?.completeGroup === true;
 
-    const action = db.prepare(`
+    const action = await db.prepare(`
       SELECT id, group_id, user_id, completed_at FROM actions WHERE id = ?
     `).get(actionId) as { id: string; group_id: string; user_id: string; completed_at: string | null } | undefined;
 
@@ -31,18 +31,18 @@ export async function PATCH(
     const now = new Date().toISOString();
 
     if (completeGroup) {
-      db.prepare(`
+      await db.prepare(`
         UPDATE actions SET completed_at = ? WHERE group_id = ? AND completed_at IS NULL
       `).run(now, action.group_id);
 
-      const groupActions = db.prepare(`SELECT * FROM actions WHERE group_id = ?`).all(action.group_id);
+      const groupActions = await db.prepare(`SELECT * FROM actions WHERE group_id = ?`).all(action.group_id);
       return NextResponse.json({ group_id: action.group_id, actions: groupActions });
     } else {
       if (action.completed_at) {
         return NextResponse.json({ error: "Action already completed" }, { status: 400 });
       }
-      db.prepare(`UPDATE actions SET completed_at = ? WHERE id = ?`).run(now, actionId);
-      return NextResponse.json(db.prepare(`SELECT * FROM actions WHERE id = ?`).get(actionId));
+      await db.prepare(`UPDATE actions SET completed_at = ? WHERE id = ?`).run(now, actionId);
+      return NextResponse.json(await db.prepare(`SELECT * FROM actions WHERE id = ?`).get(actionId));
     }
   } catch (err) {
     console.error("Failed to complete action:", err);
@@ -66,11 +66,11 @@ export async function PUT(
       return NextResponse.json({ error: "description is required" }, { status: 400 });
     }
 
-    const action = db.prepare(`SELECT user_id FROM actions WHERE id = ?`).get(actionId) as { user_id: string } | undefined;
+    const action = await db.prepare(`SELECT user_id FROM actions WHERE id = ?`).get(actionId) as { user_id: string } | undefined;
     if (!action) return NextResponse.json({ error: "Action not found" }, { status: 404 });
     if (action.user_id !== sessionUser.id && sessionUser.userType !== 'admin') return forbidden();
 
-    const info = db.prepare(`
+    const info = await db.prepare(`
       UPDATE actions SET description = ? WHERE id = ? AND completed_at IS NULL
     `).run(description.trim(), actionId);
 
@@ -78,7 +78,7 @@ export async function PUT(
       return NextResponse.json({ error: "Action not found or already completed" }, { status: 404 });
     }
 
-    return NextResponse.json(db.prepare(`SELECT * FROM actions WHERE id = ?`).get(actionId));
+    return NextResponse.json(await db.prepare(`SELECT * FROM actions WHERE id = ?`).get(actionId));
   } catch (err) {
     console.error("Failed to edit action:", err);
     return NextResponse.json({ error: "Failed to edit action" }, { status: 500 });
@@ -96,11 +96,11 @@ export async function DELETE(
   try {
     const { actionId } = await params;
 
-    const action = db.prepare(`SELECT user_id FROM actions WHERE id = ?`).get(actionId) as { user_id: string } | undefined;
+    const action = await db.prepare(`SELECT user_id FROM actions WHERE id = ?`).get(actionId) as { user_id: string } | undefined;
     if (!action) return NextResponse.json({ error: "Action not found" }, { status: 404 });
     if (action.user_id !== sessionUser.id && sessionUser.userType !== 'admin') return forbidden();
 
-    db.prepare(`DELETE FROM actions WHERE id = ?`).run(actionId);
+    await db.prepare(`DELETE FROM actions WHERE id = ?`).run(actionId);
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("Failed to delete action:", err);

@@ -4,13 +4,16 @@ import db from "@/lib/database";
 import { randomUUID } from "crypto";
 import { getSessionUser, unauthorized } from "@/lib/session";
 
-export async function GET() {
+export async function GET(req: Request) {
   const sessionUser = await getSessionUser();
   if (!sessionUser) return unauthorized();
 
   try {
-    const stmt = db.prepare("SELECT id, title, category FROM projects WHERE is_active = 1");
-    const projects = stmt.all();
+    const { searchParams } = new URL(req.url);
+    const archived = searchParams.get('archived') === 'true';
+    const projects = await db.prepare(
+      "SELECT id, title, category, is_archived FROM projects WHERE is_active = 1 AND is_archived = ?"
+    ).all(archived ? 1 : 0);
     return NextResponse.json(projects);
   } catch (err) {
     console.error("Failed to fetch projects:", err);
@@ -38,14 +41,12 @@ export async function POST(req: Request) {
     const id = randomUUID();
     const now = new Date().toISOString();
 
-    const stmt = db.prepare(`
+    await db.prepare(`
       INSERT INTO projects (
-        id, title, category, description, client, budgeted_hours, 
+        id, title, category, description, client, budgeted_hours,
         start_date, end_date, created_by, created_at, updated_at, is_active
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-    `);
-
-    stmt.run(
+    `).run(
       id,
       title,
       category,
@@ -60,8 +61,10 @@ export async function POST(req: Request) {
     );
 
     // Return the newly created project
-    const newProject = db.prepare("SELECT id, title, category FROM projects WHERE id = ?").get(id);
-    
+    const newProject = await db.prepare(
+      "SELECT id, title, category FROM projects WHERE id = ?"
+    ).get(id);
+
     return NextResponse.json(newProject, { status: 201 });
   } catch (err) {
     console.error("Failed to create project:", err);

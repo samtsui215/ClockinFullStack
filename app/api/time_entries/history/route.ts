@@ -12,7 +12,7 @@ export async function GET(req: Request) {
     const limit = Math.min(parseInt(searchParams.get("limit") || "10"), 50);
     const userId = sessionUser.id;
 
-    const entries = db.prepare(`
+    const entries = await db.prepare(`
       SELECT
         te.id,
         te.clock_in,

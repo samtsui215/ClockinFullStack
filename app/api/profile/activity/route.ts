@@ -12,7 +12,7 @@ export async function GET(req: Request) {
     const limit = Math.min(parseInt(searchParams.get("limit") || "5"), 50);
     const userId = sessionUser.id;
 
-    const actions = db.prepare(`
+    const actions = await db.prepare(`
       SELECT
         a.id,
         a.description,

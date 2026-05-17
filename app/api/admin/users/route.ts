@@ -16,22 +16,31 @@ export async function GET(req: Request) {
     const params: string[] = [];
 
     if (filter === 'this_week') {
-      const now = new Date();
-      const dayOfWeek = now.getDay();
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - dayOfWeek);
-      weekStart.setHours(0, 0, 0, 0);
-      dateFilter = 'AND te.date >= ?';
+      const weekStartParam = searchParams.get('weekStart');
+      let weekStart: Date;
+      if (weekStartParam) {
+        weekStart = new Date(weekStartParam + 'T00:00:00');
+      } else {
+        const now = new Date();
+        weekStart = new Date(now);
+        weekStart.setDate(now.getDate() - now.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+      }
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      dateFilter = 'AND te.date >= ? AND te.date <= ?';
       params.push(weekStart.toISOString().split('T')[0]);
+      params.push(weekEnd.toISOString().split('T')[0]);
     }
 
-    const users = db.prepare(`
+    const users = await db.prepare(`
       SELECT
         u.id,
         u.first_name as firstName,
         u.last_name as lastName,
         u.email,
         u.user_type as userType,
+        u.weekly_capacity as weeklyCapacity,
         u.is_active as isActive,
         u.created_at as createdAt,
         COALESCE(SUM(te.hours), 0) as totalHours,
@@ -63,16 +72,16 @@ export async function PATCH(req: Request) {
     }
 
     if (userType !== undefined) {
-      db.prepare(`UPDATE users SET user_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      await db.prepare(`UPDATE users SET user_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
         .run(userType, userId);
     }
 
     if (isActive !== undefined) {
-      db.prepare(`UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      await db.prepare(`UPDATE users SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
         .run(isActive ? 1 : 0, userId);
     }
 
-    const updated = db.prepare(`
+    const updated = await db.prepare(`
       SELECT id, first_name as firstName, last_name as lastName, email, user_type as userType, is_active as isActive
       FROM users WHERE id = ?
     `).get(userId);

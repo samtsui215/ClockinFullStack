@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { getSessionUser, unauthorized, forbidden } from "@/lib/session";
+import { businessWeekStartDate } from "@/lib/time";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -9,7 +10,7 @@ export async function GET() {
   if (user.userType !== 'admin' && user.userType !== 'manager') return forbidden();
 
   try {
-    const activeSessions = db.prepare(`
+    const activeSessions = await db.prepare(`
       SELECT
         te.id         AS entry_id,
         te.clock_in,
@@ -30,19 +31,14 @@ export async function GET() {
       project_id: string; project_title: string; project_category: string;
     }>;
 
-    const now = new Date();
-    const daysFromMonday = now.getDay() === 0 ? 6 : now.getDay() - 1;
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - daysFromMonday);
-    weekStart.setHours(0, 0, 0, 0);
-
-    const weeklyRow = db.prepare(`
+    const weekStart = businessWeekStartDate();
+    const weeklyRow = await db.prepare(`
       SELECT COALESCE(SUM(hours), 0) AS total
       FROM time_entries
-      WHERE clock_in >= ? AND status = 'completed'
-    `).get(weekStart.toISOString()) as { total: number };
+      WHERE date >= ? AND status = 'completed'
+    `).get(weekStart) as { total: number };
 
-    const employeeCount = db.prepare(
+    const employeeCount = await db.prepare(
       `SELECT COUNT(*) AS cnt FROM users WHERE is_active = 1`
     ).get() as { cnt: number };
 

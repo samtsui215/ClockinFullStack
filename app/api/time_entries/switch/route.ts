@@ -1,8 +1,9 @@
 // app/api/time_entries/switch/route.ts
 import { NextResponse } from "next/server";
-import db from "@/lib/database";
+import { client } from "@/lib/database";
 import { randomUUID } from "crypto";
 import { getSessionUser, unauthorized } from "@/lib/session";
+import { businessDate, MAX_SESSION_MS } from "@/lib/time";
 
 export async function POST(req: Request) {
   const sessionUser = await getSessionUser();
@@ -17,66 +18,87 @@ export async function POST(req: Request) {
     }
 
     const now = new Date().toISOString();
-    const today = now.split("T")[0];
+    const today = businessDate(now);
 
-    const switchProject = db.transaction(() => {
-      const active = db.prepare(`
-        SELECT id, clock_in FROM time_entries
-        WHERE user_id = ? AND clock_out IS NULL LIMIT 1
-      `).get(user_id) as { id: string; clock_in: string } | undefined;
+    const tx = await client.transaction("write");
+    try {
+      const activeRes = await tx.execute({
+        sql: `SELECT id, project_id, clock_in FROM time_entries
+              WHERE user_id = ? AND clock_out IS NULL LIMIT 1`,
+        args: [user_id],
+      });
+      const active = activeRes.rows[0] as unknown as
+        | { id: string; project_id: string | null; clock_in: string }
+        | undefined;
 
       if (active) {
-        const diffMs = new Date(now).getTime() - new Date(active.clock_in).getTime();
-        const hours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+        // Close the old session, capping a forgotten one at MAX_SESSION_MS.
+        const clockInMs = new Date(active.clock_in).getTime();
+        let oldClockOut = now;
+        let oldStatus = 'completed';
+        if (new Date(now).getTime() - clockInMs > MAX_SESSION_MS) {
+          oldClockOut = new Date(clockInMs + MAX_SESSION_MS).toISOString();
+          oldStatus = 'needs_review';
+        }
+        const hours = Math.round(
+          ((new Date(oldClockOut).getTime() - clockInMs) / 3_600_000) * 100
+        ) / 100;
 
-        db.prepare(`
-          UPDATE time_entries
-          SET clock_out = ?, hours = ?, status = 'completed', description = ?, updated_at = ?
-          WHERE id = ?
-        `).run(now, hours, description || null, now, active.id);
+        await tx.execute({
+          sql: `UPDATE time_entries
+                SET clock_out = ?, hours = ?, status = ?, description = ?, updated_at = ?
+                WHERE id = ?`,
+          args: [oldClockOut, hours, oldStatus, description || null, now, active.id],
+        });
 
-        const oldEntry = db.prepare(
-          `SELECT project_id FROM time_entries WHERE id = ?`
-        ).get(active.id) as { project_id: string } | undefined;
-        if (oldEntry?.project_id) {
-          db.prepare(`
-            UPDATE actions
-            SET completed_at = ?,
-                accumulated_seconds = accumulated_seconds + MAX(0, CAST(
-                  (julianday(?) - julianday(COALESCE(last_resumed_at, started_at))) * 86400.0
-                AS INTEGER)),
-                last_resumed_at = NULL
-            WHERE user_id = ? AND project_id = ? AND completed_at IS NULL AND carried_over = 0
-          `).run(now, now, user_id, oldEntry.project_id);
-          db.prepare(`
-            UPDATE actions SET completed_at = ?
-            WHERE user_id = ? AND project_id = ? AND completed_at IS NULL AND carried_over = 1
-          `).run(now, user_id, oldEntry.project_id);
+        if (active.project_id) {
+          await tx.execute({
+            sql: `UPDATE actions
+                  SET completed_at = ?,
+                      accumulated_seconds = accumulated_seconds + MAX(0, CAST(
+                        (julianday(?) - julianday(COALESCE(last_resumed_at, started_at))) * 86400.0
+                      AS INTEGER)),
+                      last_resumed_at = NULL
+                  WHERE user_id = ? AND project_id = ? AND completed_at IS NULL AND carried_over = 0`,
+            args: [oldClockOut, oldClockOut, user_id, active.project_id],
+          });
+          await tx.execute({
+            sql: `UPDATE actions SET completed_at = ?
+                  WHERE user_id = ? AND project_id = ? AND completed_at IS NULL AND carried_over = 1`,
+            args: [oldClockOut, user_id, active.project_id],
+          });
         }
       }
 
-      db.prepare(`
-        UPDATE actions
-        SET last_resumed_at = ?, carried_over = 0
-        WHERE user_id = ? AND project_id = ? AND carried_over = 1 AND completed_at IS NULL
-      `).run(now, user_id, new_project_id);
+      // Resume any carried-over actions on the project being switched to.
+      await tx.execute({
+        sql: `UPDATE actions
+              SET last_resumed_at = ?, carried_over = 0
+              WHERE user_id = ? AND project_id = ? AND carried_over = 1 AND completed_at IS NULL`,
+        args: [now, user_id, new_project_id],
+      });
 
       const newId = randomUUID();
-      db.prepare(`
-        INSERT INTO time_entries (
-          id, user_id, project_id, date, hours,
-          clock_in, clock_out, status, billable, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 0, ?, NULL, 'draft', 1, ?, ?)
-      `).run(newId, user_id, new_project_id, today, now, now, now);
+      await tx.execute({
+        sql: `INSERT INTO time_entries (
+                id, user_id, project_id, date, hours,
+                clock_in, clock_out, status, billable, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, 0, ?, NULL, 'draft', 1, ?, ?)`,
+        args: [newId, user_id, new_project_id, today, now, now, now],
+      });
 
-      return db.prepare(`
-        SELECT id, user_id, project_id, date, hours, clock_in, clock_out, status
-        FROM time_entries WHERE id = ?
-      `).get(newId);
-    });
+      const newRes = await tx.execute({
+        sql: `SELECT id, user_id, project_id, date, hours, clock_in, clock_out, status
+              FROM time_entries WHERE id = ?`,
+        args: [newId],
+      });
 
-    const newEntry = switchProject();
-    return NextResponse.json(newEntry, { status: 201 });
+      await tx.commit();
+      return NextResponse.json(newRes.rows[0], { status: 201 });
+    } catch (e) {
+      try { await tx.rollback(); } catch { /* already closed */ }
+      throw e;
+    }
   } catch (err) {
     console.error("Switch failed:", err);
     return NextResponse.json({ error: "Failed to switch project" }, { status: 500 });

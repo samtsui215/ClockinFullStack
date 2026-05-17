@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     }
 
     // Check if user is active in SQLite
-    const sqlUser = db.prepare(`
+    const sqlUser = await db.prepare(`
       SELECT is_active FROM users WHERE id = ?
     `).get(userRecord.uid) as { is_active: number | boolean } | undefined;
 

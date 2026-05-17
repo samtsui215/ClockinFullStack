@@ -8,7 +8,7 @@ export async function GET() {
   if (!sessionUser) return unauthorized();
 
   try {
-    const entry = db.prepare(`
+    const entry = await db.prepare(`
       SELECT
         te.id,
         te.user_id,

@@ -27,7 +27,7 @@ export async function POST(req: Request) {
     });
 
     // Add to SQLite
-    db.prepare(`
+    await db.prepare(`
       INSERT OR IGNORE INTO users (id, email, first_name, last_name, user_type)
       VALUES (?, ?, ?, ?, ?)
     `).run(userRecord.uid, email, firstName, lastName, userType || 'employee');

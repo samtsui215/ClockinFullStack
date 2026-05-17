@@ -1,7 +1,8 @@
 // app/admin/AdminClient.tsx
 'use client';
 import React, { useEffect, useState, useCallback } from 'react';
-import { Users, BarChart2, Plus, Shield, UserCheck, UserX, ChevronDown, Search, RefreshCw, FolderOpen } from 'lucide-react';
+import { Users, BarChart2, Plus, Shield, UserCheck, UserX, ChevronDown, Search, RefreshCw, FolderOpen, ChevronLeft, ChevronRight, CheckCircle2, Download, AlertTriangle } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Lora } from 'next/font/google';
 
 const lora = Lora({ subsets: ['latin'] });
@@ -21,12 +22,20 @@ interface AdminUser {
   totalHours: number;
   projectCount: number;
   lastClockIn: string | null;
+  weeklyCapacity: number;
+}
+
+interface Category {
+  id: string;
+  name: string;
+  parent_id: string | null;
 }
 
 interface Project {
   id: string;
   title: string;
   category: string;
+  is_archived?: number;
 }
 
 interface ProjectUserStat {
@@ -49,8 +58,35 @@ interface ActiveUser {
   clockedInSince: string;
 }
 
+interface ProjectAction {
+  id: string;
+  user_id: string;
+  description: string;
+  started_at: string;
+  completed_at: string | null;
+  first_name: string;
+  last_name: string;
+}
+
 interface AdminClientProps {
   currentUserId: string;
+}
+
+function getWeekStart(offset: number): Date {
+  const now = new Date();
+  const d = new Date(now);
+  d.setDate(now.getDate() - now.getDay() + offset * 7);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function formatWeekLabel(offset: number): string {
+  const start = getWeekStart(offset);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmtShort = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const year = end.getFullYear();
+  return `${fmtShort(start)} – ${fmtShort(end)}, ${year}`;
 }
 
 function formatElapsed(iso: string) {
@@ -78,6 +114,7 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
   const [tab, setTab] = useState<Tab>('users');
   const [reportingView, setReportingView] = useState<ReportingView>('all_users');
   const [hoursFilter, setHoursFilter] = useState<HoursFilter>('this_week');
+  const [weekOffset, setWeekOffset] = useState(0);
 
   // Users tab
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -89,42 +126,65 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
   const [addError, setAddError] = useState('');
 
   // Reporting - by project
+  const [categories, setCategories] = useState<Category[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [archivedProjects, setArchivedProjects] = useState<Project[]>([]);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectUserStats, setProjectUserStats] = useState<ProjectUserStat[]>([]);
   const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
   const [loadingProjectStats, setLoadingProjectStats] = useState(false);
+  const [projectActions, setProjectActions] = useState<ProjectAction[]>([]);
+  const [expandedUserIds, setExpandedUserIds] = useState<Set<string>>(new Set());
 
   const fetchUsers = useCallback(async () => {
     setLoadingUsers(true);
     try {
-      const res = await fetch(`/api/admin/users?filter=${hoursFilter}`);
+      let url = `/api/admin/users?filter=${hoursFilter}`;
+      if (hoursFilter === 'this_week') {
+        const weekStart = getWeekStart(weekOffset);
+        url += `&weekStart=${weekStart.toISOString().split('T')[0]}`;
+      }
+      const res = await fetch(url);
       if (res.ok) setUsers(await res.json());
     } catch (err) {
       console.error('Failed to fetch users:', err);
     } finally {
       setLoadingUsers(false);
     }
-  }, [hoursFilter]);
+  }, [hoursFilter, weekOffset]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
   useEffect(() => {
-    fetch('/api/projects')
-      .then(res => res.json())
-      .then((data: Project[]) => setProjects(data))
-      .catch(console.error);
+    Promise.all([
+      fetch('/api/categories').then(r => r.json()),
+      fetch('/api/projects').then(r => r.json()),
+      fetch('/api/projects?archived=true').then(r => r.json()),
+    ]).then(([cats, active, archived]) => {
+      setCategories(cats);
+      setProjects(active);
+      setArchivedProjects(archived);
+    }).catch(console.error);
   }, []);
 
   const fetchProjectStats = useCallback(async () => {
     if (!selectedProject) return;
     setLoadingProjectStats(true);
+    setExpandedUserIds(new Set());
     try {
-      const res = await fetch(`/api/admin/project-stats/${selectedProject.id}`);
-      if (res.ok) {
-        const data = await res.json();
+      const [statsRes, actionsRes] = await Promise.all([
+        fetch(`/api/admin/project-stats/${selectedProject.id}`),
+        fetch(`/api/actions/project/${selectedProject.id}`),
+      ]);
+      if (statsRes.ok) {
+        const data = await statsRes.json();
         setProjectUserStats(data.userStats || []);
         setActiveUsers(data.activeUsers || []);
+      }
+      if (actionsRes.ok) {
+        setProjectActions(await actionsRes.json());
       }
     } catch (err) {
       console.error('Failed to fetch project stats:', err);
@@ -182,6 +242,191 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
   const filteredUsers = users.filter(u =>
     `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Active employees whose hours this week exceed their weekly capacity.
+  const overCapacityUsers = users.filter(
+    u => u.isActive && Number(u.totalHours) > (u.weeklyCapacity || 40)
+  );
+
+  const projectSearchLower = projectSearch.toLowerCase().trim();
+  const filteredActiveProjects = projectSearchLower
+    ? projects.filter(p => p.title.toLowerCase().includes(projectSearchLower) || p.category.toLowerCase().includes(projectSearchLower))
+    : projects;
+  const filteredArchivedProjects = projectSearchLower
+    ? archivedProjects.filter(p => p.title.toLowerCase().includes(projectSearchLower) || p.category.toLowerCase().includes(projectSearchLower))
+    : archivedProjects;
+
+  const countInCategory = (catId: string): number => {
+    const cat = categories.find(c => c.id === catId);
+    if (!cat) return 0;
+    const direct = filteredActiveProjects.filter(p => p.category === cat.name).length;
+    return direct + categories.filter(c => c.parent_id === catId).reduce((s, c) => s + countInCategory(c.id), 0);
+  };
+
+  const renderProjectTree = (parentId: string | null, depth: number): React.ReactNode => {
+    const children = categories
+      .filter(c => (c.parent_id ?? null) === parentId)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return children.map(cat => {
+      const total = countInCategory(cat.id);
+      const hasSubcats = categories.some(c => c.parent_id === cat.id);
+      if (total === 0 && !hasSubcats) return null;
+      if (projectSearchLower && total === 0) return null;
+      const directProjects = filteredActiveProjects.filter(p => p.category === cat.name);
+      const isCollapsed = !projectSearchLower && collapsedCategories.has(cat.id);
+      return (
+        <div key={cat.id}>
+          <button
+            onClick={() => setCollapsedCategories(prev => { const n = new Set(prev); n.has(cat.id) ? n.delete(cat.id) : n.add(cat.id); return n; })}
+            style={{ paddingLeft: `${depth * 12 + 4}px` }}
+            className="w-full flex items-center justify-between py-1.5 pr-2 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <ChevronRight className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide truncate">{cat.name}</span>
+            </div>
+            {total > 0 && <span className="text-xs text-slate-400 bg-slate-100 rounded-full px-1.5 py-0.5 flex-shrink-0">{total}</span>}
+          </button>
+          {!isCollapsed && (
+            <div>
+              {directProjects.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => setSelectedProject(p)}
+                  style={{ paddingLeft: `${depth * 12 + 20}px` }}
+                  className={`w-full text-left py-2 pr-3 rounded-xl transition-all text-sm font-medium ${
+                    selectedProject?.id === p.id ? 'bg-[#1c3260] text-white' : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {p.title}
+                </button>
+              ))}
+              {renderProjectTree(cat.id, depth + 1)}
+            </div>
+          )}
+        </div>
+      );
+    });
+  };
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  const fmtTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+  const fmtDuration = (seconds: number) => {
+    if (!seconds) return '—';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const handleExport = async () => {
+    const wb = XLSX.utils.book_new();
+
+    if (reportingView === 'all_users') {
+      const label = hoursFilter === 'this_week' ? formatWeekLabel(weekOffset) : 'All Time';
+
+      const rows = users.filter(u => u.isActive).map(u => ({
+        'Employee Name': `${u.firstName} ${u.lastName}`,
+        'Email': u.email,
+        'Role': u.userType.charAt(0).toUpperCase() + u.userType.slice(1),
+        [`Hours (${label})`]: Number(u.totalHours).toFixed(2),
+        'Projects Worked On': u.projectCount,
+        'Last Active': u.lastClockIn ? fmtDate(u.lastClockIn) : 'Never',
+      }));
+
+      // Totals row
+      const totalHours = users.filter(u => u.isActive).reduce((s, u) => s + Number(u.totalHours), 0);
+      rows.push({
+        'Employee Name': 'TOTAL',
+        'Email': '',
+        'Role': '',
+        [`Hours (${label})`]: totalHours.toFixed(2),
+        'Projects Worked On': 0,
+        'Last Active': '',
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [{ wch: 26 }, { wch: 34 }, { wch: 12 }, { wch: 18 }, { wch: 20 }, { wch: 18 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'User Hours');
+      XLSX.writeFile(wb, `user-hours-${label.replace(/[^a-z0-9]/gi, '-')}.xlsx`);
+      return;
+    }
+
+    if (reportingView === 'by_project' && selectedProject) {
+      // Fetch detailed export data from dedicated endpoint
+      const res = await fetch(`/api/admin/project-export/${selectedProject.id}`);
+      if (!res.ok) { alert('Failed to fetch export data.'); return; }
+      const { project, timeEntries, actions } = await res.json() as {
+        project: { title: string; category: string; client: string | null; budgeted_hours: number | null };
+        timeEntries: { date: string; clock_in: string; clock_out: string; hours: number; description: string | null; first_name: string; last_name: string; email: string }[];
+        actions: { description: string; started_at: string; completed_at: string | null; duration_seconds: number; first_name: string; last_name: string; email: string }[];
+      };
+
+      // ── Sheet 1: Project Summary ──
+      const totalHours = timeEntries.reduce((s, e) => s + Number(e.hours), 0);
+      const uniqueEmployees = [...new Set(timeEntries.map(e => `${e.first_name} ${e.last_name}`))];
+      const datesSorted = timeEntries.map(e => e.date).sort();
+
+      const summaryData = [
+        ['Project', project.title],
+        ['Category', project.category],
+        ['Client', project.client ?? '—'],
+        ['Budgeted Hours', project.budgeted_hours ?? '—'],
+        ['Total Hours Logged', totalHours.toFixed(2)],
+        ['Total Sessions', timeEntries.length],
+        ['Contributors', uniqueEmployees.join(', ')],
+        ['First Session', datesSorted[0] ? fmtDate(datesSorted[0]) : '—'],
+        ['Last Session', datesSorted[datesSorted.length - 1] ? fmtDate(datesSorted[datesSorted.length - 1]) : '—'],
+        [],
+        ['Employee', 'Hours', 'Sessions', 'Actions Completed', 'Actions In Progress'],
+        ...projectUserStats.map(u => [
+          `${u.firstName} ${u.lastName}`,
+          Number(u.totalHours).toFixed(2),
+          u.sessionCount,
+          u.completedActions,
+          u.inProgressActions,
+        ]),
+      ];
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+      wsSummary['!cols'] = [{ wch: 24 }, { wch: 36 }, { wch: 12 }, { wch: 22 }, { wch: 22 }];
+      XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+      // ── Sheet 2: Time Log (billing source of truth) ──
+      const timeRows = timeEntries.map(e => ({
+        'Date': fmtDate(e.date),
+        'Employee': `${e.first_name} ${e.last_name}`,
+        'Email': e.email,
+        'Clock In': fmtTime(e.clock_in),
+        'Clock Out': fmtTime(e.clock_out),
+        'Hours': Number(e.hours).toFixed(2),
+        'Notes': e.description ?? '',
+      }));
+      const wsTimeLog = XLSX.utils.json_to_sheet(timeRows);
+      wsTimeLog['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 32 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 40 }];
+      XLSX.utils.book_append_sheet(wb, wsTimeLog, 'Time Log');
+
+      // ── Sheet 3: Actions ──
+      const actionRows = actions.map(a => ({
+        'Employee': `${a.first_name} ${a.last_name}`,
+        'Email': a.email,
+        'Action Description': a.description,
+        'Duration': fmtDuration(a.duration_seconds),
+        'Duration (hrs)': a.duration_seconds ? (a.duration_seconds / 3600).toFixed(2) : '—',
+        'Status': a.completed_at ? 'Completed' : 'In Progress',
+        'Date': a.started_at ? fmtDate(a.started_at) : '—',
+        'Completed At': a.completed_at ? fmtDate(a.completed_at) : '—',
+      }));
+      const wsActions = XLSX.utils.json_to_sheet(actionRows);
+      wsActions['!cols'] = [{ wch: 24 }, { wch: 32 }, { wch: 50 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, wsActions, 'Actions');
+
+      const safeName = project.title.replace(/[^a-z0-9]/gi, '-');
+      XLSX.writeFile(wb, `${safeName}-billing-report.xlsx`);
+    }
+  };
 
   return (
     <div className={`min-h-screen overflow-y-auto bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 p-8 ${lora.className}`}>
@@ -383,6 +628,7 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
           <div className="space-y-6">
             {/* Reporting sub-tabs */}
             <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
               <div className="flex bg-white border border-slate-200 rounded-xl p-1 gap-1">
                 <button
                   onClick={() => setReportingView('all_users')}
@@ -398,27 +644,88 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
                 </button>
               </div>
 
+              {/* Export button */}
+              <button
+                onClick={handleExport}
+                disabled={reportingView === 'by_project' && !selectedProject}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl text-sm font-semibold transition-colors"
+                title={reportingView === 'by_project' && !selectedProject ? 'Select a project to export' : 'Export to Excel'}
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
+              </div>
+
               {reportingView === 'all_users' && (
-                <div className="flex bg-white border border-slate-200 rounded-xl p-1 gap-1">
-                  <button
-                    onClick={() => setHoursFilter('this_week')}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${hoursFilter === 'this_week' ? 'bg-[#1c3260] text-white shadow' : 'text-slate-500 hover:text-slate-700'}`}
-                  >
-                    This Week
-                  </button>
-                  <button
-                    onClick={() => setHoursFilter('all_time')}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${hoursFilter === 'all_time' ? 'bg-[#1c3260] text-white shadow' : 'text-slate-500 hover:text-slate-700'}`}
-                  >
-                    All Time
-                  </button>
+                <div className="flex items-center gap-2">
+                  {/* Week navigator — only when in weekly mode */}
+                  {hoursFilter === 'this_week' && (
+                    <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 py-1">
+                      <button
+                        onClick={() => setWeekOffset(o => o - 1)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#1c3260] hover:bg-slate-100 transition-colors"
+                        title="Previous week"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-sm font-semibold text-slate-700 px-2 tabular-nums whitespace-nowrap">
+                        {formatWeekLabel(weekOffset)}
+                      </span>
+                      <button
+                        onClick={() => setWeekOffset(o => o + 1)}
+                        disabled={weekOffset >= 0}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#1c3260] hover:bg-slate-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Next week"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                      {weekOffset < 0 && (
+                        <button
+                          onClick={() => setWeekOffset(0)}
+                          className="ml-1 px-2 py-1 text-xs font-semibold text-[#1c3260] bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                        >
+                          Today
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex bg-white border border-slate-200 rounded-xl p-1 gap-1">
+                    <button
+                      onClick={() => setHoursFilter('this_week')}
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${hoursFilter === 'this_week' ? 'bg-[#1c3260] text-white shadow' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      By Week
+                    </button>
+                    <button
+                      onClick={() => setHoursFilter('all_time')}
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${hoursFilter === 'all_time' ? 'bg-[#1c3260] text-white shadow' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      All Time
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
 
             {/* All Users reporting view */}
             {reportingView === 'all_users' && (
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+              <div className="space-y-4">
+                {hoursFilter === 'this_week' && overCapacityUsers.length > 0 && (
+                  <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-2xl">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800">
+                        {overCapacityUsers.length} team member{overCapacityUsers.length !== 1 ? 's' : ''} over weekly capacity
+                      </p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        {overCapacityUsers
+                          .map(u => `${u.firstName} ${u.lastName} (${Number(u.totalHours).toFixed(1)}h / ${u.weeklyCapacity || 40}h)`)
+                          .join(', ')}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
                 {loadingUsers ? (
                   <div className="flex items-center justify-center h-40">
                     <div className="w-8 h-8 border-4 border-[#1c3260] border-t-transparent rounded-full animate-spin" />
@@ -429,7 +736,7 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
                       <tr className="border-b border-slate-100 bg-slate-50">
                         <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wide">User</th>
                         <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wide">
-                          Hours {hoursFilter === 'this_week' ? 'This Week' : 'All Time'}
+                          Hours {hoursFilter === 'this_week' ? `(${formatWeekLabel(weekOffset)})` : '(All Time)'}
                         </th>
                         <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wide">Projects</th>
                         <th className="text-left px-6 py-4 text-xs font-semibold text-slate-400 uppercase tracking-wide">Last Active</th>
@@ -453,13 +760,22 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
                             <div className="flex items-center gap-3">
                               <div className="flex-1 max-w-[120px] bg-slate-100 rounded-full h-2">
                                 <div
-                                  className="bg-gradient-to-r from-[#1c3260] to-[#4062ad] h-2 rounded-full"
-                                  style={{ width: `${Math.min((Number(u.totalHours) / (hoursFilter === 'this_week' ? 40 : 500)) * 100, 100)}%` }}
+                                  className={`h-2 rounded-full ${
+                                    hoursFilter === 'this_week' && Number(u.totalHours) > (u.weeklyCapacity || 40)
+                                      ? 'bg-gradient-to-r from-amber-500 to-red-500'
+                                      : 'bg-gradient-to-r from-[#1c3260] to-[#4062ad]'
+                                  }`}
+                                  style={{ width: `${Math.min((Number(u.totalHours) / (hoursFilter === 'this_week' ? (u.weeklyCapacity || 40) : 500)) * 100, 100)}%` }}
                                 />
                               </div>
                               <span className="text-sm font-bold text-slate-800 tabular-nums">
                                 {Number(u.totalHours).toFixed(1)}h
                               </span>
+                              {hoursFilter === 'this_week' && Number(u.totalHours) > (u.weeklyCapacity || 40) && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200 uppercase tracking-wide">
+                                  Overtime
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4 text-sm text-slate-600">{u.projectCount} project{u.projectCount !== 1 ? 's' : ''}</td>
@@ -473,32 +789,65 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
                     </tbody>
                   </table>
                 )}
+                </div>
               </div>
             )}
 
             {/* By Project reporting view */}
             {reportingView === 'by_project' && (
               <div className="grid grid-cols-3 gap-6">
+
                 {/* Project list */}
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-lg p-6 overflow-hidden flex flex-col" style={{ maxHeight: '70vh' }}>
-                  <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-4 flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-2 flex-shrink-0">
                     <FolderOpen className="w-4 h-4" /> Projects
                   </h3>
-                  <div className="flex-1 overflow-y-auto space-y-2">
-                    {projects.map(p => (
-                      <button
-                        key={p.id}
-                        onClick={() => setSelectedProject(p)}
-                        className={`w-full text-left px-4 py-3 rounded-xl transition-all ${
-                          selectedProject?.id === p.id
-                            ? 'bg-[#1c3260] text-white shadow-md'
-                            : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        <p className="font-medium text-sm">{p.title}</p>
-                        <p className={`text-xs mt-0.5 ${selectedProject?.id === p.id ? 'text-blue-200' : 'text-slate-400'}`}>{p.category}</p>
-                      </button>
-                    ))}
+                  <div className="relative mb-3 flex-shrink-0">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                    <input
+                      type="text"
+                      value={projectSearch}
+                      onChange={e => setProjectSearch(e.target.value)}
+                      placeholder="Search projects..."
+                      className="w-full pl-8 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#1c3260] bg-slate-50"
+                    />
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-0.5">
+                    {filteredActiveProjects.length === 0 && filteredArchivedProjects.length === 0 && (
+                      <p className="text-sm text-slate-400 text-center py-6">No projects found</p>
+                    )}
+                    {renderProjectTree(null, 0)}
+                    {filteredArchivedProjects.length > 0 && (
+                      <div className="pt-1">
+                        <div className="border-t border-slate-100 mb-1" />
+                        <button
+                          onClick={() => setCollapsedCategories(prev => { const n = new Set(prev); n.has('__archived__') ? n.delete('__archived__') : n.add('__archived__'); return n; })}
+                          className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-amber-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <ChevronRight className={`w-3.5 h-3.5 text-amber-400 transition-transform duration-150 ${collapsedCategories.has('__archived__') ? '' : 'rotate-90'}`} />
+                            <span className="text-xs font-semibold text-amber-600 uppercase tracking-wide">Archived</span>
+                          </div>
+                          <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">{filteredArchivedProjects.length}</span>
+                        </button>
+                        {!collapsedCategories.has('__archived__') && (
+                          <div className="space-y-0.5">
+                            {filteredArchivedProjects.map(p => (
+                              <button
+                                key={p.id}
+                                onClick={() => setSelectedProject(p)}
+                                style={{ paddingLeft: '20px' }}
+                                className={`w-full text-left py-2 pr-3 rounded-xl transition-all text-sm font-medium ${
+                                  selectedProject?.id === p.id ? 'bg-amber-100 text-amber-900' : 'text-slate-400 hover:bg-slate-100'
+                                }`}
+                              >
+                                {p.title}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -516,7 +865,12 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
                     <>
                       <div className="flex items-center justify-between mb-6 flex-shrink-0">
                         <div>
-                          <h3 className="text-xl font-bold text-slate-800">{selectedProject.title}</h3>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-xl font-bold text-slate-800">{selectedProject.title}</h3>
+                            {selectedProject.is_archived ? (
+                              <span className="text-xs font-semibold bg-amber-100 text-amber-600 px-2 py-0.5 rounded-full">Archived</span>
+                            ) : null}
+                          </div>
                           <p className="text-sm text-slate-400">{selectedProject.category}</p>
                         </div>
                         <div className="flex gap-4 text-center">
@@ -560,32 +914,76 @@ export default function AdminClient({ currentUserId }: AdminClientProps) {
                         ) : (
                           <>
                             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">All Contributors</p>
-                            {projectUserStats.map(u => (
-                              <div key={u.id} className="border border-slate-200 rounded-xl p-4">
-                                <div className="flex items-center justify-between mb-3">
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#1c3260] to-[#4062ad] flex items-center justify-center text-white text-xs font-bold">
-                                      {u.firstName?.[0]}{u.lastName?.[0]}
+                            {projectUserStats.map(u => {
+                              const userActions = projectActions.filter(a => a.user_id === u.id);
+                              const completedActions = userActions.filter(a => a.completed_at);
+                              const inProgressActions = userActions.filter(a => !a.completed_at);
+                              const isExpanded = expandedUserIds.has(u.id);
+                              return (
+                                <div key={u.id} className="border border-slate-200 rounded-xl p-4">
+                                  <div className="flex items-center justify-between mb-3">
+                                    <div className="flex items-center gap-3">
+                                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#1c3260] to-[#4062ad] flex items-center justify-center text-white text-xs font-bold">
+                                        {u.firstName?.[0]}{u.lastName?.[0]}
+                                      </div>
+                                      <div>
+                                        <p className="font-semibold text-slate-800 text-sm">{u.firstName} {u.lastName}</p>
+                                        <p className="text-xs text-slate-400">{u.sessionCount} session{u.sessionCount !== 1 ? 's' : ''}</p>
+                                      </div>
                                     </div>
-                                    <div>
-                                      <p className="font-semibold text-slate-800 text-sm">{u.firstName} {u.lastName}</p>
-                                      <p className="text-xs text-slate-400">{u.sessionCount} session{u.sessionCount !== 1 ? 's' : ''}</p>
+                                    <span className="text-xl font-bold text-[#1c3260]">{Number(u.totalHours).toFixed(1)}h</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2 text-center mb-3">
+                                    <div className="bg-emerald-50 rounded-lg p-2">
+                                      <p className="text-base font-bold text-emerald-600">{u.completedActions}</p>
+                                      <p className="text-xs text-slate-400">Completed</p>
+                                    </div>
+                                    <div className="bg-blue-50 rounded-lg p-2">
+                                      <p className="text-base font-bold text-blue-600">{u.inProgressActions}</p>
+                                      <p className="text-xs text-slate-400">In Progress</p>
                                     </div>
                                   </div>
-                                  <span className="text-xl font-bold text-[#1c3260]">{Number(u.totalHours).toFixed(1)}h</span>
+
+                                  {userActions.length > 0 && (
+                                    <>
+                                      <button
+                                        onClick={() => setExpandedUserIds(prev => {
+                                          const next = new Set(prev);
+                                          next.has(u.id) ? next.delete(u.id) : next.add(u.id);
+                                          return next;
+                                        })}
+                                        className="w-full flex items-center justify-between text-xs font-semibold text-slate-500 hover:text-slate-700 pt-2 border-t border-slate-100 transition-colors"
+                                      >
+                                        <span>{isExpanded ? 'Hide' : 'Show'} actions ({userActions.length})</span>
+                                        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                                      </button>
+
+                                      {isExpanded && (
+                                        <div className="mt-2 space-y-1">
+                                          {inProgressActions.map(a => (
+                                            <div key={a.id} className="flex items-start gap-2 px-2 py-1.5 bg-blue-50 rounded-lg">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
+                                              <p className="text-xs text-slate-700">{a.description}</p>
+                                            </div>
+                                          ))}
+                                          {completedActions.map(a => (
+                                            <div key={a.id} className="flex items-start gap-2 px-2 py-1.5 bg-slate-50 rounded-lg">
+                                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 mt-0.5 flex-shrink-0" />
+                                              <div className="min-w-0">
+                                                <p className="text-xs text-slate-500 line-through">{a.description}</p>
+                                                <p className="text-xs text-slate-400">
+                                                  {new Date(a.completed_at!).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                                </p>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
                                 </div>
-                                <div className="grid grid-cols-2 gap-2 text-center">
-                                  <div className="bg-emerald-50 rounded-lg p-2">
-                                    <p className="text-base font-bold text-emerald-600">{u.completedActions}</p>
-                                    <p className="text-xs text-slate-400">Actions Completed</p>
-                                  </div>
-                                  <div className="bg-blue-50 rounded-lg p-2">
-                                    <p className="text-base font-bold text-blue-600">{u.inProgressActions}</p>
-                                    <p className="text-xs text-slate-400">In Progress</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </>
                         )}
                       </div>

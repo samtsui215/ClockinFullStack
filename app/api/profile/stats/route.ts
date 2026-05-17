@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import db from "@/lib/database";
 import { getSessionUser, unauthorized } from "@/lib/session";
+import { businessWeekStartDate, addDays } from "@/lib/time";
 
 export async function GET(req: Request) {
   const sessionUser = await getSessionUser();
@@ -10,68 +11,58 @@ export async function GET(req: Request) {
   try {
     const userId = sessionUser.id;
 
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - daysFromMonday);
-    weekStart.setHours(0, 0, 0, 0);
+    // Business-week boundaries (YYYY-MM-DD), Monday-start.
+    const weekStart = businessWeekStartDate();
+    const weekEnd = addDays(weekStart, 6);
+    const prevWeekStart = addDays(weekStart, -7);
+    const prevWeekEnd = addDays(weekStart, -1);
 
-    const prevWeekStart = new Date(weekStart);
-    prevWeekStart.setDate(weekStart.getDate() - 7);
-    const prevWeekEnd = new Date(weekStart);
-
-    const weekStartISO = weekStart.toISOString();
-    const prevWeekStartISO = prevWeekStart.toISOString();
-    const prevWeekEndISO = prevWeekEnd.toISOString();
-
-    const hoursRow = db.prepare(`
+    // Hours are grouped by the business `date` column.
+    const hoursRow = await db.prepare(`
       SELECT COALESCE(SUM(hours), 0) as total
       FROM time_entries
-      WHERE user_id = ? AND clock_in >= ? AND status = 'completed'
-    `).get(userId, weekStartISO) as { total: number };
+      WHERE user_id = ? AND date >= ? AND date <= ? AND status = 'completed'
+    `).get(userId, weekStart, weekEnd) as { total: number };
 
-    const prevHoursRow = db.prepare(`
+    const prevHoursRow = await db.prepare(`
       SELECT COALESCE(SUM(hours), 0) as total
       FROM time_entries
-      WHERE user_id = ? AND clock_in >= ? AND clock_in < ? AND status = 'completed'
-    `).get(userId, prevWeekStartISO, prevWeekEndISO) as { total: number };
+      WHERE user_id = ? AND date >= ? AND date <= ? AND status = 'completed'
+    `).get(userId, prevWeekStart, prevWeekEnd) as { total: number };
 
-    const actionsCreatedRow = db.prepare(`
+    // Action counts compare against created_at/completed_at (timestamps); a
+    // date-only bound works lexicographically against the ISO timestamps.
+    const actionsCreatedRow = await db.prepare(`
       SELECT COUNT(*) as total FROM actions
       WHERE user_id = ? AND created_at >= ?
-    `).get(userId, weekStartISO) as { total: number };
+    `).get(userId, weekStart) as { total: number };
 
-    const prevActionsCreatedRow = db.prepare(`
+    const prevActionsCreatedRow = await db.prepare(`
       SELECT COUNT(*) as total FROM actions
       WHERE user_id = ? AND created_at >= ? AND created_at < ?
-    `).get(userId, prevWeekStartISO, prevWeekEndISO) as { total: number };
+    `).get(userId, prevWeekStart, weekStart) as { total: number };
 
-    const actionsCompletedRow = db.prepare(`
+    const actionsCompletedRow = await db.prepare(`
       SELECT COUNT(*) as total FROM actions
       WHERE user_id = ? AND completed_at >= ?
-    `).get(userId, weekStartISO) as { total: number };
+    `).get(userId, weekStart) as { total: number };
 
-    const activeProjectsRow = db.prepare(`
+    const activeProjectsRow = await db.prepare(`
       SELECT COUNT(DISTINCT project_id) as total FROM time_entries
-      WHERE user_id = ? AND clock_in >= ?
-    `).get(userId, weekStartISO) as { total: number };
+      WHERE user_id = ? AND date >= ? AND date <= ?
+    `).get(userId, weekStart, weekEnd) as { total: number };
 
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const dailyHours = days.map((day, i) => {
-      const dayStart = new Date(weekStart);
-      dayStart.setDate(weekStart.getDate() + i);
-      const dayEnd = new Date(dayStart);
-      dayEnd.setDate(dayStart.getDate() + 1);
-
-      const row = db.prepare(`
+    const dailyHours = await Promise.all(days.map(async (day, i) => {
+      const dateStr = addDays(weekStart, i);
+      const row = await db.prepare(`
         SELECT COALESCE(SUM(hours), 0) as total
         FROM time_entries
-        WHERE user_id = ? AND clock_in >= ? AND clock_in < ? AND status = 'completed'
-      `).get(userId, dayStart.toISOString(), dayEnd.toISOString()) as { total: number };
+        WHERE user_id = ? AND date = ? AND status = 'completed'
+      `).get(userId, dateStr) as { total: number };
 
       return { day, hours: Math.round(row.total * 10) / 10 };
-    });
+    }));
 
     const hoursDiff = hoursRow.total - prevHoursRow.total;
     const actionsDiff = actionsCreatedRow.total - prevActionsCreatedRow.total;
