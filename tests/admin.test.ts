@@ -58,6 +58,24 @@ describe('GET /api/admin/users', () => {
     const eve = list.find((u: { id: string }) => u.id === fixtures.employee.id);
     expect(Number(eve.totalHours)).toBe(7);
   });
+
+  it('returns the all-time last clock-in even with the this_week filter', async () => {
+    // An entry from months ago — outside any current week window.
+    await client.execute({
+      sql: `INSERT INTO time_entries (id, user_id, project_id, date, hours, clock_in, clock_out, status, billable)
+            VALUES ('old', ?, 'proj-1', '2025-01-15', 4, '2025-01-15T13:00:00Z', '2025-01-15T17:00:00Z', 'completed', 1)`,
+      args: [fixtures.employee.id],
+    });
+    const weekStart = businessWeekStartDate();
+    const list = await (await listUsers(
+      jsonRequest(`/api/admin/users?filter=this_week&weekStart=${weekStart}`, 'GET')
+    )).json();
+    const eve = list.find((u: { id: string }) => u.id === fixtures.employee.id);
+    // lastClockIn must populate from all-time, not from the week filter.
+    expect(eve.lastClockIn).toBeTruthy();
+    // But this-week hours stay zero since the entry is outside the window.
+    expect(Number(eve.totalHours)).toBe(0);
+  });
 });
 
 describe('PATCH /api/admin/users', () => {

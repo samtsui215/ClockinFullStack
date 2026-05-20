@@ -45,7 +45,9 @@ export async function GET(req: Request) {
         u.created_at as createdAt,
         COALESCE(SUM(te.hours), 0) as totalHours,
         COUNT(DISTINCT te.project_id) as projectCount,
-        MAX(te.clock_in) as lastClockIn
+        -- lastClockIn is all-time, not filtered by the week — "Last Active"
+        -- should keep showing real activity even when this week is empty.
+        (SELECT MAX(clock_in) FROM time_entries WHERE user_id = u.id) as lastClockIn
       FROM users u
       LEFT JOIN time_entries te ON u.id = te.user_id ${dateFilter}
       GROUP BY u.id
